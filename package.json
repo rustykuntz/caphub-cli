@@ -1,0 +1,27 @@
+{
+  "name": "@caphub/cli",
+  "version": "0.1.7",
+  "description": "Root CLI for Caphub agent capabilities",
+  "type": "module",
+  "bin": {
+    "caphub": "bin/caphub.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "keywords": [
+    "agents",
+    "cli",
+    "caphub",
+    "search",
+    "automation"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
