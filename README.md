@@ -53,5 +53,9 @@ caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
 ```
 
 ```bash
-caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'
+caphub places '{"queries":["best pizza in Vienna"]}'
+```
+
+```bash
+caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
 ```

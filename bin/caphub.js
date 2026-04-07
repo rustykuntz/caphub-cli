@@ -52,7 +52,8 @@ examples:
   caphub help search
   caphub search '{"queries":["site:github.com awesome ai agents"]}'
   caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
-  caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'
+  caphub places '{"queries":["best pizza in Vienna"]}'
+  caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
 `;
 
 class ApiError extends Error {
@@ -279,7 +280,7 @@ function printCapabilityHelp(payload) {
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'`
       : payload.capability === "places"
-        ? `caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'`
+        ? `caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'`
         : null;
   const responseShape = payload.capability === "search"
     ? {
@@ -348,7 +349,7 @@ function printCapabilityHelp(payload) {
         }
     : payload.capability === "places"
       ? {
-          queries: [{ query: "string", reviews: { mode: "none | top | all", sort_by: "mostRelevant | newest | highestRating | lowestRating" } }],
+          queries: [{ query: "string" }],
           results: [
             {
               query: "string",
@@ -364,15 +365,22 @@ function printCapabilityHelp(payload) {
                   price_level: "optional string",
                   category: "optional string",
                   cid: "optional string",
-                  reviews: [
-                    {
-                      rating: "number",
-                      iso_date: "optional string",
-                      snippet: "string",
-                      user: "optional reviewer object",
-                      media: "optional image array",
-                    },
-                  ],
+                },
+              ],
+            },
+          ],
+          cids: ["optional CID string"],
+          sort_by: "mostRelevant | newest | highestRating | lowestRating",
+          reviews: [
+            {
+              cid: "string",
+              reviews: [
+                {
+                  rating: "number",
+                  iso_date: "optional string",
+                  snippet: "string",
+                  user: "optional reviewer object",
+                  media: "optional image array",
                 },
               ],
             },
@@ -409,9 +417,11 @@ function printCapabilityHelp(payload) {
   const placesParameterOrder = [
     "queries",
     "queries[] as string",
-    "reviews.for",
-    "reviews.sort_by",
+    "cids",
+    "cids[] as string",
+    "sort_by",
     "max_queries",
+    "max_cids",
     "include_meta",
     "include_result_meta",
   ];
@@ -431,6 +441,9 @@ function printCapabilityHelp(payload) {
       ]
     : Object.entries(parameters);
   const parameterLines = orderedParameterEntries.map(([name, description]) => `- ${name}: ${description}`);
+  const limitParts = [];
+  if (payload.limits?.max_queries_per_request) limitParts.push(`max ${payload.limits.max_queries_per_request} queries per request`);
+  if (payload.limits?.max_cids_per_request) limitParts.push(`max ${payload.limits.max_cids_per_request} CIDs per request`);
   const lines = [
     title,
     "-".repeat(title.length),
@@ -440,7 +453,7 @@ function printCapabilityHelp(payload) {
     `endpoint: ${payload.endpoint}`,
     `method: ${payload.method}`,
     payload.credits ? `credits: ${payload.credits}` : null,
-    payload.limits?.max_queries_per_request ? `limits: max ${payload.limits.max_queries_per_request} queries per request` : null,
+    limitParts.length ? `limits: ${limitParts.join(", ")}` : null,
     "",
     "request:",
     "format:",
