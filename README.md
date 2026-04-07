@@ -41,7 +41,7 @@ caphub help places
 ## Run capabilities
 
 ```bash
-caphub search '{"queries":["site:github.com awesome ai agents"]}'
+caphub search '{"queries":["best AI agent frameworks 2026"]}'
 ```
 
 ```bash

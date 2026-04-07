@@ -50,7 +50,7 @@ examples:
   caphub auth login
   caphub auth login --api-key csk_live_...
   caphub help search
-  caphub search '{"queries":["site:github.com awesome ai agents"]}'
+  caphub search '{"queries":["best AI agent frameworks 2026"]}'
   caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
   caphub places '{"queries":["best pizza in Vienna"]}'
   caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
@@ -269,7 +269,7 @@ function printCapabilityHelp(payload) {
           ? "caphub places"
           : `caphub ${payload.capability}`;
   const requestExample = payload.capability === "search"
-    ? `caphub search '{"queries":["site:github.com awesome ai agents","awesome lists agents","codex awesome lists"]}'`
+    ? `caphub search '{"queries":["best AI agent frameworks 2026","autonomous coding agents"]}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"]}'`
       : payload.capability === "places"
