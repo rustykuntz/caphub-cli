@@ -49,7 +49,7 @@ caphub search-ideas '{"queries":["best robot vacuum"]}'
 ```
 
 ```bash
-caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'
+caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
 ```
 
 ```bash

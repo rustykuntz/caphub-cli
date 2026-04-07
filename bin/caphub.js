@@ -51,7 +51,7 @@ examples:
   caphub auth login --api-key csk_live_...
   caphub help search
   caphub search '{"queries":["site:github.com awesome ai agents"]}'
-  caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'
+  caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
   caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'
 `;
 
@@ -275,9 +275,9 @@ function printCapabilityHelp(payload) {
         ? `caphub places '{"queries":["best pizza in Vienna"]}'`
         : `caphub ${payload.capability} '${JSON.stringify(payload.input_contract)}'`;
   const configuredRequestExample = payload.capability === "search"
-    ? `caphub search '{"queries":[{"q":"EV discounts Thailand","country":"th","language":"en","from_time":"week"}]}'`
+    ? `caphub search '{"queries":["EV discounts Thailand"],"country":"th","language":"en","from_time":"week"}'`
     : payload.capability === "shopping"
-      ? `caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'`
+      ? `caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'`
       : payload.capability === "places"
         ? `caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'`
         : null;
@@ -285,7 +285,7 @@ function printCapabilityHelp(payload) {
     ? {
         queries: [
           {
-            q: "string",
+            query: "string",
             country: "optional string",
             language: "optional string",
             from_time: "optional string",
@@ -316,7 +316,7 @@ function printCapabilityHelp(payload) {
       ? {
           queries: [
             {
-              q: "string",
+              query: "string",
               country: "optional string",
               language: "optional string",
             },
@@ -390,11 +390,9 @@ function printCapabilityHelp(payload) {
   const searchParameterOrder = [
     "queries",
     "queries[] as string",
-    "queries[] as object",
-    "queries[].q",
-    "queries[].country",
-    "queries[].language",
-    "queries[].from_time",
+    "country",
+    "language",
+    "from_time",
     "max_queries",
     "include_meta",
     "include_result_meta",
@@ -402,10 +400,8 @@ function printCapabilityHelp(payload) {
   const shoppingParameterOrder = [
     "queries",
     "queries[] as string",
-    "queries[] as object",
-    "queries[].q",
-    "queries[].country",
-    "queries[].language",
+    "country",
+    "language",
     "max_queries",
     "include_meta",
     "include_result_meta",
