@@ -413,10 +413,6 @@ function printCapabilityHelp(payload) {
   const placesParameterOrder = [
     "queries",
     "queries[] as string",
-    "queries[] as object",
-    "queries[].query",
-    "queries[].q",
-    "queries[].language",
     "reviews.for",
     "reviews.sort_by",
     "max_queries",
