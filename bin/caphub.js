@@ -51,7 +51,7 @@ examples:
   caphub auth login --api-key csk_live_...
   caphub help search
   caphub search '{"queries":["site:github.com awesome ai agents"]}'
-  caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en","num":10}]}'
+  caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'
 `;
 
 class ApiError extends Error {
@@ -272,7 +272,7 @@ function printCapabilityHelp(payload) {
   const configuredRequestExample = payload.capability === "search"
     ? `caphub search '{"queries":[{"q":"EV discounts Thailand","country":"th","language":"en","from_time":"week"}]}'`
     : payload.capability === "shopping"
-      ? `caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en","num":10}]}'`
+      ? `caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'`
     : null;
   const responseShape = payload.capability === "search"
     ? {
@@ -282,7 +282,6 @@ function printCapabilityHelp(payload) {
             country: "optional string",
             language: "optional string",
             from_time: "optional string",
-            num: "number",
           },
         ],
         results: [
@@ -313,7 +312,6 @@ function printCapabilityHelp(payload) {
               q: "string",
               country: "optional string",
               language: "optional string",
-              num: "number",
             },
           ],
           results: [
@@ -351,7 +349,6 @@ function printCapabilityHelp(payload) {
     "queries[].country",
     "queries[].language",
     "queries[].from_time",
-    "queries[].num",
     "max_queries",
     "include_meta",
     "include_result_meta",
@@ -363,7 +360,6 @@ function printCapabilityHelp(payload) {
     "queries[].q",
     "queries[].country",
     "queries[].language",
-    "queries[].num",
     "max_queries",
     "include_meta",
     "include_result_meta",
