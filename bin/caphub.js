@@ -15,7 +15,7 @@ const CONFIG_PATH = resolve(CONFIG_DIR, "config.json");
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted infrastructure for agent-ready capabilities such as search, query expansion, and product shopping.
+Caphub is hosted infrastructure for agent-ready capabilities such as search, query expansion, product shopping, and local places.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -29,7 +29,7 @@ commands:
   auth login            open website login flow; stores api key locally after approval
   auth whoami           verify the current api key against the API
   auth logout           remove stored api key from local config
-  <capability> <json>   run a capability directly, e.g. search, search-ideas, or shopping
+  <capability> <json>   run a capability directly, e.g. search, search-ideas, shopping, or places
 
 agent workflow:
   1. caphub capabilities
@@ -52,6 +52,7 @@ examples:
   caphub help search
   caphub search '{"queries":["site:github.com awesome ai agents"]}'
   caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'
+  caphub places '{"queries":[{"q":"best pizza in Koh Samui","country":"th","language":"en","reviews":{"for":"top","sort_by":"newest"}}]}'
 `;
 
 class ApiError extends Error {
@@ -263,17 +264,23 @@ function printCapabilityHelp(payload) {
       ? "caphub search ideas"
       : payload.capability === "shopping"
         ? "caphub product shopping"
-        : `caphub ${payload.capability}`;
+        : payload.capability === "places"
+          ? "caphub places"
+          : `caphub ${payload.capability}`;
   const requestExample = payload.capability === "search"
     ? `caphub search '{"queries":["site:github.com awesome ai agents","awesome lists agents","codex awesome lists"]}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"]}'`
-    : `caphub ${payload.capability} '${JSON.stringify(payload.input_contract)}'`;
+      : payload.capability === "places"
+        ? `caphub places '{"queries":["best pizza in Koh Samui"]}'`
+        : `caphub ${payload.capability} '${JSON.stringify(payload.input_contract)}'`;
   const configuredRequestExample = payload.capability === "search"
     ? `caphub search '{"queries":[{"q":"EV discounts Thailand","country":"th","language":"en","from_time":"week"}]}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'`
-    : null;
+      : payload.capability === "places"
+        ? `caphub places '{"queries":[{"q":"best pizza in Koh Samui","country":"th","language":"en","reviews":{"for":"top","sort_by":"newest"}}]}'`
+        : null;
   const responseShape = payload.capability === "search"
     ? {
         queries: [
@@ -339,6 +346,55 @@ function printCapabilityHelp(payload) {
             credits_used: "number",
           },
         }
+    : payload.capability === "places"
+      ? {
+          queries: [
+            {
+              q: "string",
+              country: "optional string",
+              language: "optional string",
+              reviews: {
+                mode: "none | top | all",
+                sort_by: "mostRelevant | newest | highestRating | lowestRating",
+              },
+            },
+          ],
+          results: [
+            {
+              query: "string",
+              places: [
+                {
+                  position: "number",
+                  title: "string",
+                  address: "string",
+                  latitude: "optional number",
+                  longitude: "optional number",
+                  rating: "optional number",
+                  rating_count: "optional number",
+                  price_level: "optional string",
+                  category: "optional string",
+                  cid: "optional string",
+                  reviews: [
+                    {
+                      rating: "number",
+                      iso_date: "optional string",
+                      snippet: "string",
+                      user: "optional reviewer object",
+                      media: "optional image array",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          total_usage: {
+            total_credits_used: "number",
+            credits_remaining: "number",
+          },
+          billing: {
+            credits_used: "number",
+          },
+        }
     : payload.output_contract;
   const parameters = payload.parameters || {};
   const searchParameterOrder = [
@@ -364,11 +420,26 @@ function printCapabilityHelp(payload) {
     "include_meta",
     "include_result_meta",
   ];
+  const placesParameterOrder = [
+    "queries",
+    "queries[] as string",
+    "queries[] as object",
+    "queries[].q",
+    "queries[].country",
+    "queries[].language",
+    "reviews.for",
+    "reviews.sort_by",
+    "max_queries",
+    "include_meta",
+    "include_result_meta",
+  ];
   const preferredParameterOrder = payload.capability === "search"
     ? searchParameterOrder
     : payload.capability === "shopping"
       ? shoppingParameterOrder
-      : null;
+      : payload.capability === "places"
+        ? placesParameterOrder
+        : null;
   const orderedParameterEntries = preferredParameterOrder
     ? [
         ...preferredParameterOrder

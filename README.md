@@ -35,6 +35,7 @@ caphub help
 caphub capabilities
 caphub help search
 caphub help shopping
+caphub help places
 ```
 
 ## Run capabilities
@@ -49,4 +50,8 @@ caphub search-ideas '{"queries":["best robot vacuum"]}'
 
 ```bash
 caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'
+```
+
+```bash
+caphub places '{"queries":[{"q":"best pizza in Koh Samui","country":"th","language":"en","reviews":{"for":"top","sort_by":"newest"}}]}'
 ```
