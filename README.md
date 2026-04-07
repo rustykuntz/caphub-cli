@@ -53,5 +53,5 @@ caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}
 ```
 
 ```bash
-caphub places '{"queries":[{"q":"best pizza in Koh Samui","country":"th","language":"en","reviews":{"for":"top","sort_by":"newest"}}]}'
+caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'
 ```

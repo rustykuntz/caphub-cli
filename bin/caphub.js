@@ -52,7 +52,7 @@ examples:
   caphub help search
   caphub search '{"queries":["site:github.com awesome ai agents"]}'
   caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'
-  caphub places '{"queries":[{"q":"best pizza in Koh Samui","country":"th","language":"en","reviews":{"for":"top","sort_by":"newest"}}]}'
+  caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'
 `;
 
 class ApiError extends Error {
@@ -272,14 +272,14 @@ function printCapabilityHelp(payload) {
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"]}'`
       : payload.capability === "places"
-        ? `caphub places '{"queries":["best pizza in Koh Samui"]}'`
+        ? `caphub places '{"queries":["best pizza in Vienna"]}'`
         : `caphub ${payload.capability} '${JSON.stringify(payload.input_contract)}'`;
   const configuredRequestExample = payload.capability === "search"
     ? `caphub search '{"queries":[{"q":"EV discounts Thailand","country":"th","language":"en","from_time":"week"}]}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":[{"q":"apple m5 pro","country":"th","language":"en"}]}'`
       : payload.capability === "places"
-        ? `caphub places '{"queries":[{"q":"best pizza in Koh Samui","country":"th","language":"en","reviews":{"for":"top","sort_by":"newest"}}]}'`
+        ? `caphub places '{"queries":["best pizza in Vienna"],"reviews":{"for":"top","sort_by":"newest"}}'`
         : null;
   const responseShape = payload.capability === "search"
     ? {
@@ -348,17 +348,7 @@ function printCapabilityHelp(payload) {
         }
     : payload.capability === "places"
       ? {
-          queries: [
-            {
-              q: "string",
-              country: "optional string",
-              language: "optional string",
-              reviews: {
-                mode: "none | top | all",
-                sort_by: "mostRelevant | newest | highestRating | lowestRating",
-              },
-            },
-          ],
+          queries: [{ query: "string", reviews: { mode: "none | top | all", sort_by: "mostRelevant | newest | highestRating | lowestRating" } }],
           results: [
             {
               query: "string",
@@ -424,8 +414,8 @@ function printCapabilityHelp(payload) {
     "queries",
     "queries[] as string",
     "queries[] as object",
+    "queries[].query",
     "queries[].q",
-    "queries[].country",
     "queries[].language",
     "reviews.for",
     "reviews.sort_by",
