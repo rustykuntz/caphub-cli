@@ -2,6 +2,8 @@
 
 Root CLI for Caphub capabilities.
 
+Capabilities can run server-side on CapHub infrastructure or locally from this machine. Server-side actions may consume credits. Local actions return `local: true` and `billing.credits_used: 0`.
+
 ## Install
 
 ```bash
@@ -36,6 +38,7 @@ caphub capabilities
 caphub help search
 caphub help shopping
 caphub help places
+caphub reddit --help
 ```
 
 ## Run capabilities
@@ -58,4 +61,26 @@ caphub places '{"queries":["best pizza in Vienna"]}'
 
 ```bash
 caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
+```
+
+## Hybrid Reddit capability
+
+Use local reads when the agent already knows the target subreddit, post, or user:
+
+```bash
+caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
+```
+
+```bash
+caphub reddit post '{"id":"1kaqi3k","comments":"top","comment_limit":20,"comment_depth":3}'
+```
+
+```bash
+caphub reddit user '{"username":"Ok-Contribution9043","type":"comments","limit":10}'
+```
+
+Use server-side Reddit search when the agent needs to discover relevant Reddit posts by topic:
+
+```bash
+caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA","time":"month","limit":10}'
 ```
