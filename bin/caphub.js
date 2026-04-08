@@ -887,6 +887,10 @@ async function commandHelp(args) {
     process.stdout.write(ROOT_HELP);
     return;
   }
+  if (capability === "reddit") {
+    process.stdout.write(REDDIT_HELP);
+    return;
+  }
 
   const payload = await fetchJson(`${apiUrl}/v1/${capability}/help`);
   printCapabilityHelp(payload);
