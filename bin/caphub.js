@@ -25,7 +25,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, Reddit, YouTube, finance news, maps, and weather.
+Caphub helps agents research products, compare offers, find the best places, learn a topic, get the latest financial news, and more without dragging full websites into context.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -91,7 +91,7 @@ const REDDIT_HELP = `caphub reddit
 
 Hybrid Reddit capability.
 
-Reddit search runs server-side through CapHub and costs credits. Reddit feed, post, and user reads run locally from this machine and cost 0 credits.
+Use Reddit when the agent needs to discover what people are saying, then read posts, comments, and user history efficiently. Reddit search runs server-side and costs credits. Feed, post, and user reads run locally and cost 0 credits.
 
 commands:
   reddit search <json>  Search Reddit posts server-side; requires auth; 1 credit
@@ -117,7 +117,7 @@ const YOUTUBE_HELP = `caphub youtube
 
 Hybrid YouTube capability.
 
-Use local transcript reads when the agent already knows the target video and is running on a machine with normal outbound internet access. Use server-side YouTube endpoints when the agent needs discovery, channel or playlist traversal, or a paid fallback for transcript extraction. Server transcript fallback is priced at 2 Caphub credits under the current Caphub pricing model.
+Use YouTube when the agent needs relevant videos, creator or playlist context, or a transcript from a known video. Local transcript reads are free when the machine can reach YouTube directly. Server-side search, channel, playlist, and transcript fallback actions are available when discovery or hosted access is needed.
 
 commands:
   youtube transcript <json>         Fetch transcript locally; no auth; 0 credits
@@ -155,7 +155,7 @@ const FINANCE_HELP = `caphub finance
 
 Server-side finance capability.
 
-Use finance news when the input is a stock ticker symbol and the agent needs the last 24 hours of recent coverage. This endpoint is server-only, requires auth, and costs 1 credit per ticker query.
+Use finance news when the agent needs the latest coverage for a stock ticker such as NVDA, AAPL, or BRK.B. This endpoint is server-only, requires auth, and costs 1 credit per ticker query.
 
 commands:
   finance news <json>  Fetch recent ticker news server-side; requires auth; 1 credit per ticker
@@ -173,7 +173,7 @@ const MAPS_HELP = `caphub maps
 
 Server-side maps capability.
 
-Use maps search when the agent knows what to look for and the named area, but not exact coordinates. Use maps places when the location is already inside the query text. Use maps reviews when explicit place CIDs are already known.
+Use maps when the agent needs to find the best places in an area, search for restaurants or services, or inspect reviews before making a recommendation.
 
 commands:
   maps search <json>   Search Google Maps in a named area server-side; requires auth; 3 credits
@@ -196,7 +196,7 @@ const WEATHER_HELP = `caphub weather
 
 Server-side weather capability.
 
-Use weather forecast when the user gives a human place name and the agent needs daily rain and temperature for the next few days. This endpoint is server-only, requires auth, and costs 1 credit per request.
+Use weather forecast when the agent needs rain and temperature for a place before making plans or recommendations. This endpoint is server-only, requires auth, and costs 1 credit per request.
 
 commands:
   weather forecast <json>  Fetch daily weather forecast by place name server-side; requires auth; 1 credit

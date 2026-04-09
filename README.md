@@ -2,7 +2,9 @@
 
 Root CLI for Caphub capabilities.
 
-Capabilities can run server-side on CapHub infrastructure or locally from this machine. Server-side actions may consume credits. Local actions return `local: true` and `billing.credits_used: 0`.
+Caphub helps agents research products, compare offers, find the best places, learn a topic, get the latest financial news, and more without dragging full websites into context.
+
+Capabilities can run server-side on Caphub infrastructure or locally from this machine. Server-side actions may consume credits. Local actions return `local: true` and `billing.credits_used: 0`.
 
 ## Install
 
@@ -135,7 +137,7 @@ caphub youtube playlist-videos '{"playlist":"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"
 
 ## Finance news
 
-Use server-side finance news when the input is a stock ticker symbol and the agent needs the last 24 hours of coverage:
+Use server-side finance news when the agent needs the latest coverage for a stock ticker:
 
 ```bash
 caphub finance news '{"queries":["NVDA","AAPL"]}'
@@ -147,7 +149,7 @@ caphub finance news '{"queries":["BRK.B"],"limit":20}'
 
 ## Maps
 
-Use server-side maps search when the agent knows the query and the named area, but not exact coordinates:
+Use maps when the agent needs to find the best places in an area, compare options, or inspect reviews:
 
 ```bash
 caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
@@ -171,7 +173,7 @@ caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
 
 ## Weather
 
-Use server-side weather forecast when the user gives a human place name and the agent needs daily rain and temperature:
+Use server-side weather forecast when the agent needs rain and temperature for a place before making plans or recommendations:
 
 ```bash
 caphub weather forecast '{"location":"Koh Phangan","days":3}'
