@@ -25,7 +25,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, Reddit, YouTube, and finance news.
+Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, Reddit, YouTube, finance news, and maps search.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -47,12 +47,13 @@ commands:
   youtube search <json> search YouTube videos server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
   finance news <json>   fetch recent stock ticker news server-side; costs credits
+  maps search <json>    search Google Maps in a named area server-side; costs credits
 
 agent workflow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|youtube|finance <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|youtube|finance|maps <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -81,6 +82,7 @@ examples:
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub finance news '{"queries":["NVDA","AAPL"]}'
+  caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
 `;
 
 const REDDIT_HELP = `caphub reddit
@@ -163,6 +165,24 @@ agent routing:
 examples:
   caphub finance news '{"queries":["NVDA","AAPL"]}'
   caphub finance news '{"queries":["BRK.B"],"limit":20}'
+`;
+
+const MAPS_HELP = `caphub maps
+
+Server-side maps capability.
+
+Use maps search when the agent knows what to look for and the named area, but not exact coordinates. The server resolves the area name to coordinates, then searches Google Maps around that viewport. Zoom is optional and must stay between 11 and 18. This endpoint currently costs 3 credits per request.
+
+commands:
+  maps search <json>  Search Google Maps in a named area server-side; requires auth; 3 credits
+
+agent routing:
+  category or business type in a named area       caphub maps search
+  exact place text search with reviews            caphub places
+
+examples:
+  caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
+  caphub maps search '{"query":"coworking","area":"Koh Phangan"}'
 `;
 
 class ApiError extends Error {
@@ -1252,6 +1272,20 @@ async function financeServerAction(action, args, { requiresAuth = true } = {}) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function mapsServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `maps ${action}`);
+  const apiKey = getApiKey();
+  if (requiresAuth && !apiKey) {
+    fail(`Error: maps ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+  const payload = await fetchJson(`${getApiUrl()}/v1/maps/${action}`, {
+    method: "POST",
+    apiKey,
+    body,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function youtubeServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `youtube ${action}`);
   const apiKey = getApiKey();
@@ -1330,6 +1364,21 @@ async function commandFinance(args) {
   fail("Error: finance actions are: news.");
 }
 
+async function commandMaps(args) {
+  const sub = args[0];
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    process.stdout.write(MAPS_HELP);
+    return;
+  }
+
+  if (sub === "search") {
+    await mapsServerAction("search", args.slice(1));
+    return;
+  }
+
+  fail("Error: maps actions are: search.");
+}
+
 async function commandHelp(args) {
   const apiUrl = getApiUrl();
   const capability = args[0];
@@ -1347,6 +1396,10 @@ async function commandHelp(args) {
   }
   if (capability === "finance") {
     process.stdout.write(FINANCE_HELP);
+    return;
+  }
+  if (capability === "maps") {
+    process.stdout.write(MAPS_HELP);
     return;
   }
 
@@ -1561,6 +1614,11 @@ async function main() {
 
   if (cmd === "finance") {
     await commandFinance(args.slice(1));
+    return;
+  }
+
+  if (cmd === "maps") {
+    await commandMaps(args.slice(1));
     return;
   }
 

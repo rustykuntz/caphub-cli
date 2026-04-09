@@ -143,3 +143,15 @@ caphub finance news '{"queries":["NVDA","AAPL"]}'
 ```bash
 caphub finance news '{"queries":["BRK.B"],"limit":20}'
 ```
+
+## Maps search
+
+Use server-side maps search when the agent knows the query and the named area, but not exact coordinates:
+
+```bash
+caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
+```
+
+```bash
+caphub maps search '{"query":"coworking","area":"Koh Phangan"}'
+```
