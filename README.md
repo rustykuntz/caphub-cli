@@ -131,3 +131,15 @@ caphub youtube channel-latest '{"channel":"@TED"}'
 ```bash
 caphub youtube playlist-videos '{"playlist":"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"}'
 ```
+
+## Finance news
+
+Use server-side finance news when the input is a stock ticker symbol and the agent needs the last 24 hours of coverage:
+
+```bash
+caphub finance news '{"queries":["NVDA","AAPL"]}'
+```
+
+```bash
+caphub finance news '{"queries":["BRK.B"],"limit":20}'
+```

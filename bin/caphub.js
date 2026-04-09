@@ -25,7 +25,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, Reddit, and YouTube.
+Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, Reddit, YouTube, and finance news.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -46,12 +46,13 @@ commands:
   reddit user <json>    fetch user posts or comments locally; free
   youtube search <json> search YouTube videos server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
+  finance news <json>   fetch recent stock ticker news server-side; costs credits
 
 agent workflow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|youtube <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|youtube|finance <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -79,6 +80,7 @@ examples:
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
+  caphub finance news '{"queries":["NVDA","AAPL"]}'
 `;
 
 const REDDIT_HELP = `caphub reddit
@@ -111,7 +113,7 @@ const YOUTUBE_HELP = `caphub youtube
 
 Hybrid YouTube capability.
 
-Use local transcript reads when the agent already knows the target video and is running on a machine with normal outbound internet access. Use server-side YouTube endpoints when the agent needs discovery, channel or playlist traversal, or a paid fallback for transcript extraction. Server transcript fallback is priced at 2 Caphub credits, based on the current provider cost and store economics.
+Use local transcript reads when the agent already knows the target video and is running on a machine with normal outbound internet access. Use server-side YouTube endpoints when the agent needs discovery, channel or playlist traversal, or a paid fallback for transcript extraction. Server transcript fallback is priced at 2 Caphub credits under the current Caphub pricing model.
 
 commands:
   youtube transcript <json>         Fetch transcript locally; no auth; 0 credits
@@ -143,6 +145,24 @@ examples:
   caphub youtube channel-videos '{"channel":"@TED"}'
   caphub youtube channel-latest '{"channel":"@TED"}'
   caphub youtube playlist-videos '{"playlist":"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"}'
+`;
+
+const FINANCE_HELP = `caphub finance
+
+Server-side finance capability.
+
+Use finance news when the input is a stock ticker symbol and the agent needs the last 24 hours of recent coverage. This endpoint is server-only, requires auth, and costs 1 credit per ticker query.
+
+commands:
+  finance news <json>  Fetch recent ticker news server-side; requires auth; 1 credit per ticker
+
+agent routing:
+  recent headlines for a known stock ticker      caphub finance news
+  non-ticker company research                    use caphub search instead
+
+examples:
+  caphub finance news '{"queries":["NVDA","AAPL"]}'
+  caphub finance news '{"queries":["BRK.B"],"limit":20}'
 `;
 
 class ApiError extends Error {
@@ -1218,6 +1238,20 @@ async function commandReddit(args) {
   fail("Error: reddit actions are: search, feed, post, user.");
 }
 
+async function financeServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `finance ${action}`);
+  const apiKey = getApiKey();
+  if (requiresAuth && !apiKey) {
+    fail(`Error: finance ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+  const payload = await fetchJson(`${getApiUrl()}/v1/finance/${action}`, {
+    method: "POST",
+    apiKey,
+    body,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function youtubeServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `youtube ${action}`);
   const apiKey = getApiKey();
@@ -1281,6 +1315,21 @@ async function commandYouTube(args) {
   fail("Error: youtube actions are: transcript, transcript-server, search, channel-resolve, channel-search, channel-videos, channel-latest, playlist-videos.");
 }
 
+async function commandFinance(args) {
+  const sub = args[0];
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    process.stdout.write(FINANCE_HELP);
+    return;
+  }
+
+  if (sub === "news") {
+    await financeServerAction("news", args.slice(1));
+    return;
+  }
+
+  fail("Error: finance actions are: news.");
+}
+
 async function commandHelp(args) {
   const apiUrl = getApiUrl();
   const capability = args[0];
@@ -1294,6 +1343,10 @@ async function commandHelp(args) {
   }
   if (capability === "youtube") {
     process.stdout.write(YOUTUBE_HELP);
+    return;
+  }
+  if (capability === "finance") {
+    process.stdout.write(FINANCE_HELP);
     return;
   }
 
@@ -1506,12 +1559,17 @@ async function main() {
     return;
   }
 
+  if (cmd === "finance") {
+    await commandFinance(args.slice(1));
+    return;
+  }
+
   await commandCapability(cmd, args.slice(1));
 }
 
 await main().catch((error) => {
   const cmd = process.argv[2];
-  const capability = cmd && !["help", "--help", "-h", "capabilities", "auth", "reddit", "youtube", "--version", "-v", "version"].includes(cmd)
+  const capability = cmd && !["help", "--help", "-h", "capabilities", "auth", "--version", "-v", "version"].includes(cmd)
     ? cmd
     : undefined;
   failWithHints(error.message || "unknown error", error, { capability });
