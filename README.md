@@ -109,7 +109,7 @@ Server transcript fallback costs `2` Caphub credits. Local transcript extraction
 Use server-side endpoints for discovery and channel or playlist traversal:
 
 ```bash
-caphub youtube search '{"q":"qwen3 8b review","type":"video","limit":10}'
+caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
 ```
 
 ```bash

@@ -44,7 +44,7 @@ commands:
   reddit feed <json>    fetch subreddit feed locally; free
   reddit post <json>    fetch post content and comments locally; free
   reddit user <json>    fetch user posts or comments locally; free
-  youtube search <json> search YouTube videos/channels server-side; costs credits
+  youtube search <json> search YouTube videos server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
 
 agent workflow:
@@ -77,7 +77,7 @@ examples:
   caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
   caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA"}'
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
-  caphub youtube search '{"q":"qwen3 8b review","type":"video","limit":10}'
+  caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
 `;
 
@@ -116,7 +116,7 @@ Use local transcript reads when the agent already knows the target video and is 
 commands:
   youtube transcript <json>         Fetch transcript locally; no auth; 0 credits
   youtube transcript-server <json>  Fetch transcript server-side; requires auth; 2 credits
-  youtube search <json>             Search YouTube videos or channels server-side; requires auth; 1 credit
+  youtube search <json>             Search YouTube videos server-side; requires auth; 1 credit
   youtube channel-resolve <json>    Resolve @handle/URL/UC... ID server-side; requires auth; 0 credits
   youtube channel-search <json>     Search within a channel server-side; requires auth; 1 credit
   youtube channel-videos <json>     List channel uploads page-by-page server-side; requires auth; 1 credit per page
@@ -137,7 +137,7 @@ examples:
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub youtube transcript '{"video_url":"https://youtu.be/GmE4JwmFuHk","language":"en","send_metadata":true}'
   caphub youtube transcript-server '{"video_url":"GmE4JwmFuHk","send_metadata":true}'
-  caphub youtube search '{"q":"qwen3 8b review","type":"video","limit":10}'
+  caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube channel-resolve '{"input":"@TED"}'
   caphub youtube channel-search '{"channel":"@TED","q":"ai","limit":10}'
   caphub youtube channel-videos '{"channel":"@TED"}'
