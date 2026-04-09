@@ -1,6 +1,6 @@
 {
   "name": "@caphub/cli",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Root CLI for Caphub agent capabilities",
   "type": "module",
   "bin": {

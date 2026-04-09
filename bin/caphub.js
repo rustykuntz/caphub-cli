@@ -25,7 +25,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, Reddit, YouTube, finance news, and maps search.
+Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, Reddit, YouTube, finance news, and maps.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -39,7 +39,7 @@ commands:
   auth login            open website login flow; stores api key locally after approval
   auth whoami           verify the current api key against the API
   auth logout           remove stored api key from local config
-  <capability> <json>   run a capability directly, e.g. search, search-ideas, shopping, or places
+  <capability> <json>   run a capability directly, e.g. search, search-ideas, or shopping
   reddit search <json>  search Reddit posts server-side; costs credits
   reddit feed <json>    fetch subreddit feed locally; free
   reddit post <json>    fetch post content and comments locally; free
@@ -75,14 +75,14 @@ examples:
   caphub help search
   caphub search '{"queries":["best AI agent frameworks 2026"]}'
   caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
-  caphub places '{"queries":["best pizza in Vienna"]}'
-  caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
   caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA"}'
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub finance news '{"queries":["NVDA","AAPL"]}'
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
+  caphub maps places '{"queries":["best pizza in Vienna"]}'
+  caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
 `;
 
 const REDDIT_HELP = `caphub reddit
@@ -171,18 +171,23 @@ const MAPS_HELP = `caphub maps
 
 Server-side maps capability.
 
-Use maps search when the agent knows what to look for and the named area, but not exact coordinates. The server resolves the area name to coordinates, then searches Google Maps around that viewport. Zoom is optional and must stay between 11 and 18. This endpoint currently costs 3 credits per request.
+Use maps search when the agent knows what to look for and the named area, but not exact coordinates. Use maps places when the location is already inside the query text. Use maps reviews when explicit place CIDs are already known.
 
 commands:
-  maps search <json>  Search Google Maps in a named area server-side; requires auth; 3 credits
+  maps search <json>   Search Google Maps in a named area server-side; requires auth; 3 credits
+  maps places <json>   Search places by text query server-side; requires auth; 1 credit per query
+  maps reviews <json>  Fetch place reviews by CID server-side; requires auth; 1 credit per CID
 
 agent routing:
   category or business type in a named area       caphub maps search
-  exact place text search with reviews            caphub places
+  exact place text search with location phrase    caphub maps places
+  reviews for known place CID                     caphub maps reviews
 
 examples:
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
   caphub maps search '{"query":"coworking","area":"Koh Phangan"}'
+  caphub maps places '{"queries":["best pizza in Vienna"]}'
+  caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
 `;
 
 class ApiError extends Error {
@@ -1375,8 +1380,16 @@ async function commandMaps(args) {
     await mapsServerAction("search", args.slice(1));
     return;
   }
+  if (sub === "places") {
+    await mapsServerAction("places", args.slice(1));
+    return;
+  }
+  if (sub === "reviews") {
+    await mapsServerAction("reviews", args.slice(1));
+    return;
+  }
 
-  fail("Error: maps actions are: search.");
+  fail("Error: maps actions are: search, places, reviews.");
 }
 
 async function commandHelp(args) {

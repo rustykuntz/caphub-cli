@@ -144,7 +144,7 @@ caphub finance news '{"queries":["NVDA","AAPL"]}'
 caphub finance news '{"queries":["BRK.B"],"limit":20}'
 ```
 
-## Maps search
+## Maps
 
 Use server-side maps search when the agent knows the query and the named area, but not exact coordinates:
 
@@ -154,4 +154,16 @@ caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
 
 ```bash
 caphub maps search '{"query":"coworking","area":"Koh Phangan"}'
+```
+
+Use `maps places` when the query already contains the location:
+
+```bash
+caphub maps places '{"queries":["best pizza in Vienna"]}'
+```
+
+Use `maps reviews` when you already have one or more place CIDs:
+
+```bash
+caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
 ```
