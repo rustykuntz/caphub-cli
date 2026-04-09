@@ -14,6 +14,7 @@ const CONFIG_DIR = resolve(os.homedir(), ".config", "caphub");
 const CONFIG_PATH = resolve(CONFIG_DIR, "config.json");
 const LOCAL_FETCH_TIMEOUT_MS = 16000;
 const REDDIT_BASE_URL = "https://www.reddit.com";
+const YOUTUBE_BASE_URL = "https://www.youtube.com";
 
 const LOCAL_FETCH_HEADERS = {
   Accept: "application/json, text/html;q=0.9, */*;q=0.8",
@@ -24,7 +25,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, and Reddit.
+Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, local places, Reddit, and YouTube.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -43,12 +44,14 @@ commands:
   reddit feed <json>    fetch subreddit feed locally; free
   reddit post <json>    fetch post content and comments locally; free
   reddit user <json>    fetch user posts or comments locally; free
+  youtube search <json> search YouTube videos/channels server-side; costs credits
+  youtube transcript <json> fetch YouTube transcript locally; free
 
 agent workflow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|youtube <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -74,6 +77,8 @@ examples:
   caphub places '{"cids":["13290506179446267841"],"sort_by":"newest"}'
   caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA"}'
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
+  caphub youtube search '{"q":"qwen3 8b review","type":"video","limit":10}'
+  caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
 `;
 
 const REDDIT_HELP = `caphub reddit
@@ -100,6 +105,44 @@ examples:
   caphub reddit feed '{"subreddit":"LocalLLaMA","sort":"top","time":"week","limit":10}'
   caphub reddit post '{"id":"1kaqi3k","comments":"top","comment_limit":20,"comment_depth":3}'
   caphub reddit user '{"username":"Ok-Contribution9043","type":"comments","limit":10}'
+`;
+
+const YOUTUBE_HELP = `caphub youtube
+
+Hybrid YouTube capability.
+
+Use local transcript reads when the agent already knows the target video and is running on a machine with normal outbound internet access. Use server-side YouTube endpoints when the agent needs discovery, channel or playlist traversal, or a paid fallback for transcript extraction. Server transcript fallback is priced at 2 Caphub credits, based on the current provider cost and store economics.
+
+commands:
+  youtube transcript <json>         Fetch transcript locally; no auth; 0 credits
+  youtube transcript-server <json>  Fetch transcript server-side; requires auth; 2 credits
+  youtube search <json>             Search YouTube videos or channels server-side; requires auth; 1 credit
+  youtube channel-resolve <json>    Resolve @handle/URL/UC... ID server-side; requires auth; 0 credits
+  youtube channel-search <json>     Search within a channel server-side; requires auth; 1 credit
+  youtube channel-videos <json>     List channel uploads page-by-page server-side; requires auth; 1 credit per page
+  youtube channel-latest <json>     Fetch latest 15 channel videos server-side; requires auth; 0 credits
+  youtube playlist-videos <json>    List playlist videos page-by-page server-side; requires auth; 1 credit per page
+
+agent routing:
+  known video id/url + local machine            caphub youtube transcript
+  known video id/url + no local network path    caphub youtube transcript-server
+  topic discovery across YouTube                caphub youtube search
+  convert @handle or channel URL to UC... ID    caphub youtube channel-resolve
+  search within one creator/channel             caphub youtube channel-search
+  enumerate uploads from a known channel        caphub youtube channel-videos
+  latest videos from a known channel            caphub youtube channel-latest
+  enumerate videos from a playlist              caphub youtube playlist-videos
+
+examples:
+  caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
+  caphub youtube transcript '{"video_url":"https://youtu.be/GmE4JwmFuHk","language":"en","send_metadata":true}'
+  caphub youtube transcript-server '{"video_url":"GmE4JwmFuHk","send_metadata":true}'
+  caphub youtube search '{"q":"qwen3 8b review","type":"video","limit":10}'
+  caphub youtube channel-resolve '{"input":"@TED"}'
+  caphub youtube channel-search '{"channel":"@TED","q":"ai","limit":10}'
+  caphub youtube channel-videos '{"channel":"@TED"}'
+  caphub youtube channel-latest '{"channel":"@TED"}'
+  caphub youtube playlist-videos '{"playlist":"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"}'
 `;
 
 class ApiError extends Error {
@@ -238,6 +281,68 @@ async function localFetchJson(url) {
   return data;
 }
 
+async function localFetchText(url, label) {
+  let resp;
+  try {
+    resp = await fetch(url, {
+      headers: LOCAL_FETCH_HEADERS,
+      redirect: "follow",
+      signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const reason = error.name === "TimeoutError"
+      ? `timeout ${LOCAL_FETCH_TIMEOUT_MS / 1000}s`
+      : (error.cause?.code || error.message);
+    throw new Error(`${label} failed: ${reason}`);
+  }
+
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`${label} failed: HTTP ${resp.status}`);
+  }
+  if (!text) {
+    throw new Error(`${label} returned an empty response`);
+  }
+  return text;
+}
+
+async function fetchYouTubeWatchPage(videoId) {
+  const fetchHtml = async (cookie = "") => {
+    let resp;
+    try {
+      resp = await fetch(`${YOUTUBE_BASE_URL}/watch?v=${videoId}`, {
+        headers: {
+          ...LOCAL_FETCH_HEADERS,
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
+      });
+    } catch (error) {
+      const reason = error.name === "TimeoutError"
+        ? `timeout ${LOCAL_FETCH_TIMEOUT_MS / 1000}s`
+        : (error.cause?.code || error.message);
+      throw new Error(`local YouTube video page fetch failed: ${reason}`);
+    }
+
+    const html = await resp.text();
+    if (!resp.ok) throw new Error(`local YouTube video page fetch failed: HTTP ${resp.status}`);
+    return html;
+  };
+
+  let html = await fetchHtml();
+  let cookie = "";
+  if (html.includes('action="https://consent.youtube.com/s"')) {
+    const consentValue = html.match(/name="v" value="(.*?)"/)?.[1] || "";
+    if (consentValue) {
+      cookie = `CONSENT=YES+${consentValue}`;
+      html = await fetchHtml(cookie);
+    }
+  }
+
+  return { html, cookie };
+}
+
 async function readJsonCommandInput(args, label) {
   const arg = args[0];
   const rawInput = arg ?? (process.stdin.isTTY ? "" : await readStdin());
@@ -292,6 +397,50 @@ function normalizeEnum(value, allowed, fallback) {
   return allowed.includes(normalized) ? normalized : fallback;
 }
 
+function normalizeYouTubeVideoInput(value) {
+  if (typeof value !== "string") return "";
+  const raw = value.trim();
+  if (!raw) return "";
+  if (/^[A-Za-z0-9_-]{11}$/.test(raw)) return raw;
+
+  try {
+    const url = new URL(raw);
+    if (url.hostname === "youtu.be") {
+      const candidate = url.pathname.split("/").filter(Boolean)[0] || "";
+      return /^[A-Za-z0-9_-]{11}$/.test(candidate) ? candidate : "";
+    }
+    if (!/(^|\.)youtube\.com$/i.test(url.hostname)) return "";
+    const watchId = url.searchParams.get("v");
+    if (watchId && /^[A-Za-z0-9_-]{11}$/.test(watchId)) return watchId;
+
+    const pathMatch = url.pathname.match(/\/(shorts|embed|live)\/([A-Za-z0-9_-]{11})(?:\/|$)/i);
+    return pathMatch?.[2] || "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeYouTubeVideoUrl(value) {
+  const videoId = normalizeYouTubeVideoInput(value);
+  return videoId ? `${YOUTUBE_BASE_URL}/watch?v=${videoId}` : "";
+}
+
+function normalizeYouTubeHandleInput(value) {
+  if (typeof value !== "string") return "";
+  const raw = value.trim();
+  return raw && raw.length <= 200 ? raw : "";
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes"].includes(normalized)) return true;
+    if (["false", "0", "no"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
 function createdUtcToIso(value) {
   const seconds = Number(value || 0);
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -313,6 +462,195 @@ function decodeHtml(value) {
     .replace(/&quot;/g, "\"")
     .replace(/&#39;/g, "'")
     .replace(/&#x27;/g, "'");
+}
+
+function stripXmlTags(value) {
+  return typeof value === "string" ? value.replace(/<[^>]+>/g, "") : "";
+}
+
+function flattenTextSegments(segments) {
+  return segments.map((segment) => segment.text).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+function formatTranscriptText(segments, includeTimestamp) {
+  return segments
+    .map((segment) => includeTimestamp ? `[${segment.start.toFixed(2)}s] ${segment.text}` : segment.text)
+    .join("\n")
+    .trim();
+}
+
+function parseYoutubeCaptionXml(xml) {
+  const segments = [];
+  for (const match of xml.matchAll(/<text\b([^>]*)>([\s\S]*?)<\/text>/g)) {
+    const attrs = match[1] || "";
+    const rawText = match[2] || "";
+    const start = Number(attrs.match(/\bstart="([^"]+)"/)?.[1] || 0);
+    const duration = Number(attrs.match(/\bdur="([^"]+)"/)?.[1] || 0);
+    const text = decodeHtml(stripXmlTags(rawText)).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    segments.push({
+      text,
+      start: Number(start.toFixed(3)),
+      duration: Number(duration.toFixed(3)),
+    });
+  }
+  if (segments.length) return segments;
+
+  for (const match of xml.matchAll(/<p\b([^>]*)>([\s\S]*?)<\/p>/g)) {
+    const attrs = match[1] || "";
+    const rawText = match[2] || "";
+    const startMs = Number(attrs.match(/\bt="([^"]+)"/)?.[1] || 0);
+    const durationMs = Number(attrs.match(/\bd="([^"]+)"/)?.[1] || 0);
+    const text = decodeHtml(stripXmlTags(rawText))
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) continue;
+    segments.push({
+      text,
+      start: Number((startMs / 1000).toFixed(3)),
+      duration: Number((durationMs / 1000).toFixed(3)),
+    });
+  }
+  return segments;
+}
+
+function pickYouTubeCaptionTrack(tracks, preferredLanguage) {
+  if (!Array.isArray(tracks) || !tracks.length) return null;
+  const preferred = typeof preferredLanguage === "string" ? preferredLanguage.trim().toLowerCase() : "";
+  if (preferred) {
+    const exact = tracks.find((track) => String(track.languageCode || "").toLowerCase() === preferred);
+    if (exact) return exact;
+    const partial = tracks.find((track) => String(track.languageCode || "").toLowerCase().startsWith(preferred));
+    if (partial) return partial;
+  }
+  return tracks.find((track) => track.kind !== "asr") || tracks[0];
+}
+
+function extractInnertubeApiKey(html) {
+  return html.match(/"INNERTUBE_API_KEY":"([^"]+)"/)?.[1]
+    || html.match(/INNERTUBE_API_KEY["']?\s*:\s*["']([^"']+)["']/)?.[1]
+    || "";
+}
+
+function extractVisitorData(html) {
+  return html.match(/"VISITOR_DATA":"([^"]+)"/)?.[1]
+    || html.match(/"visitorData":"([^"]+)"/)?.[1]
+    || "";
+}
+
+async function fetchLocalYouTubeTranscript(body) {
+  const videoId = normalizeYouTubeVideoInput(body.video_url || body.videoId || body.video_id || body.id);
+  if (!videoId) fail("Error: video_url is required and must be a YouTube video URL or 11-character video ID.");
+
+  const format = normalizeEnum(body.format, ["json", "text"], "json");
+  const includeTimestamp = normalizeBoolean(body.include_timestamp, true);
+  const sendMetadata = normalizeBoolean(body.send_metadata, false);
+  const preferredLanguage = typeof body.language === "string" ? body.language.trim() : "";
+
+  let html;
+  let youtubeCookie = "";
+  try {
+    const page = await fetchYouTubeWatchPage(videoId);
+    html = page.html;
+    youtubeCookie = page.cookie;
+  } catch (error) {
+    fail(`Error: ${error.message}`);
+  }
+
+  const apiKey = extractInnertubeApiKey(html);
+  if (!apiKey) fail("Error: local YouTube transcript fetch failed: could not extract INNERTUBE_API_KEY.");
+
+  let playerResponse;
+  try {
+    const resp = await fetch(`${YOUTUBE_BASE_URL}/youtubei/v1/player?key=${encodeURIComponent(apiKey)}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(youtubeCookie ? { Cookie: youtubeCookie } : {}),
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "ANDROID",
+            clientVersion: "20.10.38",
+          },
+        },
+        videoId,
+      }),
+      signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
+    });
+    const raw = await resp.text();
+    try {
+      playerResponse = raw ? JSON.parse(raw) : {};
+    } catch {
+      playerResponse = { raw };
+    }
+    if (!resp.ok) {
+      const reason = playerResponse?.error?.message
+        || playerResponse?.playabilityStatus?.reason
+        || playerResponse?.raw
+        || `HTTP ${resp.status}`;
+      fail(`Error: local YouTube transcript fetch failed: ${reason}`);
+    }
+  } catch (error) {
+    const reason = error.name === "TimeoutError"
+      ? `timeout ${LOCAL_FETCH_TIMEOUT_MS / 1000}s`
+      : (error.cause?.code || error.message);
+    fail(`Error: local YouTube transcript fetch failed: ${reason}`);
+  }
+
+  const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+  const track = pickYouTubeCaptionTrack(tracks, preferredLanguage);
+  if (!track?.baseUrl) {
+    const reason = playerResponse?.playabilityStatus?.reason || "captions unavailable";
+    fail(`Error: local YouTube transcript fetch failed: ${reason}`);
+  }
+
+  let xml;
+  try {
+    xml = await localFetchText(track.baseUrl, "local YouTube caption fetch");
+  } catch (error) {
+    fail(`Error: ${error.message}`);
+  }
+
+  const segments = parseYoutubeCaptionXml(xml);
+  if (!segments.length) fail("Error: local YouTube transcript fetch failed: transcript returned no segments.");
+
+  const outputTranscript = format === "json"
+    ? (
+        includeTimestamp
+          ? segments
+          : segments.map(({ text }) => ({ text }))
+      )
+    : undefined;
+  const transcriptText = format === "text"
+    ? formatTranscriptText(segments, includeTimestamp)
+    : flattenTextSegments(segments);
+  const metadata = sendMetadata
+    ? {
+        title: playerResponse?.videoDetails?.title || null,
+        author_name: playerResponse?.videoDetails?.author || null,
+        author_url: playerResponse?.videoDetails?.channelId
+          ? `${YOUTUBE_BASE_URL}/channel/${playerResponse.videoDetails.channelId}`
+          : null,
+        thumbnail_url: playerResponse?.videoDetails?.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || null,
+      }
+    : undefined;
+
+  return {
+    action: "transcript",
+    video_id: videoId,
+    video_url: normalizeYouTubeVideoUrl(videoId),
+    language: track.languageCode || null,
+    language_name: track.name?.simpleText || track.vssId || null,
+    is_generated: track.kind === "asr",
+    local: true,
+    billing: { credits_used: 0 },
+    format,
+    ...(outputTranscript ? { transcript: outputTranscript } : {}),
+    transcript_text: transcriptText,
+    ...(metadata ? { metadata: Object.fromEntries(Object.entries(metadata).filter(([, value]) => value)) } : {}),
+  };
 }
 
 function parseRedditResultUrl(rawUrl) {
@@ -880,6 +1218,69 @@ async function commandReddit(args) {
   fail("Error: reddit actions are: search, feed, post, user.");
 }
 
+async function youtubeServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `youtube ${action}`);
+  const apiKey = getApiKey();
+  if (requiresAuth && !apiKey) {
+    fail(`Error: youtube ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+  const payload = await fetchJson(`${getApiUrl()}/v1/youtube/${action}`, {
+    method: "POST",
+    apiKey,
+    body,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function youtubeTranscript(args) {
+  const body = await readJsonCommandInput(args, "youtube transcript");
+  const payload = await fetchLocalYouTubeTranscript(body);
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function commandYouTube(args) {
+  const sub = args[0];
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    process.stdout.write(YOUTUBE_HELP);
+    return;
+  }
+
+  if (sub === "transcript") {
+    await youtubeTranscript(args.slice(1));
+    return;
+  }
+  if (sub === "transcript-server") {
+    await youtubeServerAction("transcript", args.slice(1));
+    return;
+  }
+  if (sub === "search") {
+    await youtubeServerAction("search", args.slice(1));
+    return;
+  }
+  if (sub === "channel-resolve") {
+    await youtubeServerAction("channel-resolve", args.slice(1));
+    return;
+  }
+  if (sub === "channel-search") {
+    await youtubeServerAction("channel-search", args.slice(1));
+    return;
+  }
+  if (sub === "channel-videos") {
+    await youtubeServerAction("channel-videos", args.slice(1));
+    return;
+  }
+  if (sub === "channel-latest") {
+    await youtubeServerAction("channel-latest", args.slice(1));
+    return;
+  }
+  if (sub === "playlist-videos") {
+    await youtubeServerAction("playlist-videos", args.slice(1));
+    return;
+  }
+
+  fail("Error: youtube actions are: transcript, transcript-server, search, channel-resolve, channel-search, channel-videos, channel-latest, playlist-videos.");
+}
+
 async function commandHelp(args) {
   const apiUrl = getApiUrl();
   const capability = args[0];
@@ -889,6 +1290,10 @@ async function commandHelp(args) {
   }
   if (capability === "reddit") {
     process.stdout.write(REDDIT_HELP);
+    return;
+  }
+  if (capability === "youtube") {
+    process.stdout.write(YOUTUBE_HELP);
     return;
   }
 
@@ -1096,12 +1501,17 @@ async function main() {
     return;
   }
 
+  if (cmd === "youtube") {
+    await commandYouTube(args.slice(1));
+    return;
+  }
+
   await commandCapability(cmd, args.slice(1));
 }
 
 await main().catch((error) => {
   const cmd = process.argv[2];
-  const capability = cmd && !["help", "--help", "-h", "capabilities", "auth", "reddit", "--version", "-v", "version"].includes(cmd)
+  const capability = cmd && !["help", "--help", "-h", "capabilities", "auth", "reddit", "youtube", "--version", "-v", "version"].includes(cmd)
     ? cmd
     : undefined;
   failWithHints(error.message || "unknown error", error, { capability });

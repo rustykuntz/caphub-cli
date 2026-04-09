@@ -39,6 +39,7 @@ caphub help search
 caphub help shopping
 caphub help places
 caphub reddit --help
+caphub youtube --help
 ```
 
 ## Run capabilities
@@ -83,4 +84,50 @@ Use server-side Reddit search when the agent needs to discover relevant Reddit p
 
 ```bash
 caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA","time":"month","limit":10}'
+```
+
+## Hybrid YouTube capability
+
+Use local transcript reads when the agent already knows the target video and is running on a normal machine with outbound internet access:
+
+```bash
+caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
+```
+
+```bash
+caphub youtube transcript '{"video_url":"https://youtu.be/GmE4JwmFuHk","language":"en","send_metadata":true}'
+```
+
+Use the server fallback when local transcript extraction is unavailable:
+
+```bash
+caphub youtube transcript-server '{"video_url":"GmE4JwmFuHk","send_metadata":true}'
+```
+
+Server transcript fallback costs `2` Caphub credits. Local transcript extraction remains free.
+
+Use server-side endpoints for discovery and channel or playlist traversal:
+
+```bash
+caphub youtube search '{"q":"qwen3 8b review","type":"video","limit":10}'
+```
+
+```bash
+caphub youtube channel-resolve '{"input":"@TED"}'
+```
+
+```bash
+caphub youtube channel-search '{"channel":"@TED","q":"ai","limit":10}'
+```
+
+```bash
+caphub youtube channel-videos '{"channel":"@TED"}'
+```
+
+```bash
+caphub youtube channel-latest '{"channel":"@TED"}'
+```
+
+```bash
+caphub youtube playlist-videos '{"playlist":"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"}'
 ```
