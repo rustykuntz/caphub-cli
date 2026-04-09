@@ -25,7 +25,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, Reddit, YouTube, finance news, and maps.
+Caphub is hosted and local infrastructure for agent-ready capabilities such as search, query expansion, product shopping, Reddit, YouTube, finance news, maps, and weather.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -48,12 +48,13 @@ commands:
   youtube transcript <json> fetch YouTube transcript locally; free
   finance news <json>   fetch recent stock ticker news server-side; costs credits
   maps search <json>    search Google Maps in a named area server-side; costs credits
+  weather forecast <json> fetch daily weather forecast by place name server-side; costs credits
 
 agent workflow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|youtube|finance|maps <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|youtube|finance|maps|weather <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -83,6 +84,7 @@ examples:
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
   caphub maps places '{"queries":["best pizza in Vienna"]}'
   caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
+  caphub weather forecast '{"location":"Koh Phangan","days":3}'
 `;
 
 const REDDIT_HELP = `caphub reddit
@@ -188,6 +190,25 @@ examples:
   caphub maps search '{"query":"coworking","area":"Koh Phangan"}'
   caphub maps places '{"queries":["best pizza in Vienna"]}'
   caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
+`;
+
+const WEATHER_HELP = `caphub weather
+
+Server-side weather capability.
+
+Use weather forecast when the user gives a human place name and the agent needs daily rain and temperature for the next few days. This endpoint is server-only, requires auth, and costs 1 credit per request.
+
+commands:
+  weather forecast <json>  Fetch daily weather forecast by place name server-side; requires auth; 1 credit
+
+agent routing:
+  rain and temperature for a named place         caphub weather forecast
+  location is already a city/area name           caphub weather forecast
+  local business discovery                       use caphub maps instead
+
+examples:
+  caphub weather forecast '{"location":"Koh Phangan","days":3}'
+  caphub weather forecast '{"location":"Bangkok","days":1}'
 `;
 
 class ApiError extends Error {
@@ -1291,6 +1312,20 @@ async function mapsServerAction(action, args, { requiresAuth = true } = {}) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function weatherServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `weather ${action}`);
+  const apiKey = getApiKey();
+  if (requiresAuth && !apiKey) {
+    fail(`Error: weather ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+  const payload = await fetchJson(`${getApiUrl()}/v1/weather/${action}`, {
+    method: "POST",
+    apiKey,
+    body,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function youtubeServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `youtube ${action}`);
   const apiKey = getApiKey();
@@ -1392,6 +1427,21 @@ async function commandMaps(args) {
   fail("Error: maps actions are: search, places, reviews.");
 }
 
+async function commandWeather(args) {
+  const sub = args[0];
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    process.stdout.write(WEATHER_HELP);
+    return;
+  }
+
+  if (sub === "forecast") {
+    await weatherServerAction("forecast", args.slice(1));
+    return;
+  }
+
+  fail("Error: weather actions are: forecast.");
+}
+
 async function commandHelp(args) {
   const apiUrl = getApiUrl();
   const capability = args[0];
@@ -1413,6 +1463,10 @@ async function commandHelp(args) {
   }
   if (capability === "maps") {
     process.stdout.write(MAPS_HELP);
+    return;
+  }
+  if (capability === "weather") {
+    process.stdout.write(WEATHER_HELP);
     return;
   }
 
@@ -1632,6 +1686,11 @@ async function main() {
 
   if (cmd === "maps") {
     await commandMaps(args.slice(1));
+    return;
+  }
+
+  if (cmd === "weather") {
+    await commandWeather(args.slice(1));
     return;
   }
 

@@ -37,7 +37,8 @@ caphub help
 caphub capabilities
 caphub help search
 caphub help shopping
-caphub help places
+caphub help maps
+caphub help weather
 caphub reddit --help
 caphub youtube --help
 ```
@@ -166,4 +167,16 @@ Use `maps reviews` when you already have one or more place CIDs:
 
 ```bash
 caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
+```
+
+## Weather
+
+Use server-side weather forecast when the user gives a human place name and the agent needs daily rain and temperature:
+
+```bash
+caphub weather forecast '{"location":"Koh Phangan","days":3}'
+```
+
+```bash
+caphub weather forecast '{"location":"Bangkok","days":1}'
 ```
