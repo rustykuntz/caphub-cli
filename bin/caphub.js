@@ -39,7 +39,8 @@ commands:
   auth login            open website login flow; stores api key locally after approval
   auth whoami           verify the current api key against the API
   auth logout           remove stored api key from local config
-  <capability> <json>   run a capability directly, e.g. search, search-ideas, or shopping
+  <capability> <json>   run a capability directly, e.g. search, scholar, patents, search-ideas, or shopping
+  fetch page <json>     fetch a public webpage locally; free
   reddit search <json>  search Reddit posts server-side; costs credits
   reddit feed <json>    fetch subreddit feed locally; free
   reddit post <json>    fetch post content and comments locally; free
@@ -74,7 +75,11 @@ examples:
   caphub auth login
   caphub auth login --api-key csk_live_...
   caphub help search
+  caphub help fetch
   caphub search '{"queries":["best AI agent frameworks 2026"]}'
+  caphub fetch page '{"url":"https://example.com"}'
+  caphub scholar '{"queries":["faster skin regeneration"],"country":"us","language":"en"}'
+  caphub patents '{"queries":["faster skin regeneration"]}'
   caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
   caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA"}'
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
@@ -85,6 +90,25 @@ examples:
   caphub maps places '{"queries":["best pizza in Vienna"]}'
   caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
   caphub weather forecast '{"location":"Koh Phangan","days":3}'
+`;
+
+const FETCH_HELP = `caphub fetch
+
+Local page fetch capability.
+
+Use fetch page when the agent needs to read a public webpage directly from this machine without using a browser loop. This is useful for pulling the main text from known URLs before deciding whether a fuller browser flow is needed.
+
+commands:
+  fetch page <json>  Fetch a public webpage locally; no auth; 0 credits
+
+agent routing:
+  known public webpage URL                    caphub fetch page
+  search or discovery first                   use caphub search before fetch page
+  pages behind login or heavy interaction     use the browser instead
+
+examples:
+  caphub fetch page '{"url":"https://example.com"}'
+  caphub fetch page '{"url":"https://example.com","include_html":true,"max_chars":8000}'
 `;
 
 const REDDIT_HELP = `caphub reddit
@@ -372,6 +396,38 @@ async function localFetchText(url, label) {
   return text;
 }
 
+async function localFetchPage(url, label) {
+  let resp;
+  try {
+    // Keep generic page fetches on the same local path as Reddit and YouTube:
+    // browser-like headers, redirects, and timeout behavior improve success on public pages.
+    resp = await fetch(url, {
+      headers: LOCAL_FETCH_HEADERS,
+      redirect: "follow",
+      signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const reason = error.name === "TimeoutError"
+      ? `timeout ${LOCAL_FETCH_TIMEOUT_MS / 1000}s`
+      : (error.cause?.code || error.message);
+    throw new Error(`${label} failed: ${reason}`);
+  }
+
+  const text = await resp.text();
+  if (!resp.ok) {
+    throw new Error(`${label} failed: HTTP ${resp.status}`);
+  }
+  if (!text) {
+    throw new Error(`${label} returned an empty response`);
+  }
+
+  return {
+    url: resp.url || url,
+    contentType: resp.headers.get("content-type") || "",
+    text,
+  };
+}
+
 async function fetchYouTubeWatchPage(videoId) {
   const fetchHtml = async (cookie = "") => {
     let resp;
@@ -507,6 +563,24 @@ function normalizeBoolean(value, fallback = false) {
   return fallback;
 }
 
+function normalizeHttpUrl(value) {
+  if (typeof value !== "string") return "";
+  const raw = value.trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function normalizeMaxChars(value, fallback, max) {
+  const num = Number(value || fallback);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(250, Math.min(max, Math.floor(num)));
+}
+
 function createdUtcToIso(value) {
   const seconds = Number(value || 0);
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -532,6 +606,45 @@ function decodeHtml(value) {
 
 function stripXmlTags(value) {
   return typeof value === "string" ? value.replace(/<[^>]+>/g, "") : "";
+}
+
+function stripHtmlTags(value) {
+  return typeof value === "string" ? value.replace(/<[^>]+>/g, " ") : "";
+}
+
+function extractHtmlTitle(html) {
+  return decodeHtml((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || "").replace(/\s+/g, " ").trim());
+}
+
+function extractMetaContent(html, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["']`, "i"),
+    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["']`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["']`, "i"),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match?.[1]) return decodeHtml(match[1].trim());
+  }
+  return "";
+}
+
+function htmlToReadableText(html) {
+  return decodeHtml(
+    html
+      .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|li|h[1-6]|tr)>/gi, "\n")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\r/g, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .replace(/[ \t]+/g, " ")
+  ).trim();
 }
 
 function flattenTextSegments(segments) {
@@ -834,6 +947,10 @@ function printCapabilities(payload) {
 function printCapabilityHelp(payload) {
   const title = payload.capability === "search"
     ? "caphub web search"
+    : payload.capability === "scholar"
+      ? "caphub academic search"
+    : payload.capability === "patents"
+      ? "caphub patent search"
     : payload.capability === "search-ideas"
       ? "caphub search ideas"
       : payload.capability === "shopping"
@@ -843,6 +960,10 @@ function printCapabilityHelp(payload) {
           : `caphub ${payload.capability}`;
   const requestExample = payload.capability === "search"
     ? `caphub search '{"queries":["best AI agent frameworks 2026","autonomous coding agents"]}'`
+    : payload.capability === "scholar"
+      ? `caphub scholar '{"queries":["faster skin regeneration"]}'`
+    : payload.capability === "patents"
+      ? `caphub patents '{"queries":["faster skin regeneration"]}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"]}'`
       : payload.capability === "places"
@@ -850,6 +971,10 @@ function printCapabilityHelp(payload) {
         : `caphub ${payload.capability} '${JSON.stringify(payload.input_contract)}'`;
   const configuredRequestExample = payload.capability === "search"
     ? `caphub search '{"queries":["EV discounts Thailand"],"country":"th","language":"en","from_time":"week"}'`
+    : payload.capability === "scholar"
+      ? `caphub scholar '{"queries":["faster skin regeneration"],"country":"us","language":"en"}'`
+    : payload.capability === "patents"
+      ? null
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'`
       : payload.capability === "places"
@@ -886,6 +1011,78 @@ function printCapabilityHelp(payload) {
           credits_used: "number",
         },
       }
+    : payload.capability === "scholar"
+      ? {
+          queries: [
+            {
+              query: "string",
+              country: "optional string",
+              language: "optional string",
+            },
+          ],
+          results: [
+            {
+              query: "string",
+              items: [
+                {
+                  title: "string",
+                  link: "string",
+                  publication_info: "string",
+                  snippet: "string",
+                  year: "optional number",
+                  cited_by: "optional number",
+                  pdf_url: "optional http URL",
+                  id: "optional string",
+                },
+              ],
+            },
+          ],
+          total_usage: {
+            total_credits_used: "number",
+            credits_remaining: "number",
+          },
+          billing: {
+            credits_used: "number",
+          },
+        }
+    : payload.capability === "patents"
+      ? {
+          queries: [
+            {
+              query: "string",
+            },
+          ],
+          results: [
+            {
+              query: "string",
+              items: [
+                {
+                  title: "string",
+                  snippet: "string",
+                  link: "string",
+                  priority_date: "optional YYYY-MM-DD",
+                  filing_date: "optional YYYY-MM-DD",
+                  grant_date: "optional YYYY-MM-DD",
+                  publication_date: "optional YYYY-MM-DD",
+                  inventor: "optional string",
+                  assignee: "optional string",
+                  publication_number: "optional string",
+                  language: "optional string",
+                  thumbnail_url: "optional http URL",
+                  pdf_url: "optional http URL",
+                  figures: "optional figure array",
+                },
+              ],
+            },
+          ],
+          total_usage: {
+            total_credits_used: "number",
+            credits_remaining: "number",
+          },
+          billing: {
+            credits_used: "number",
+          },
+        }
     : payload.capability === "shopping"
       ? {
           queries: [
@@ -978,6 +1175,22 @@ function printCapabilityHelp(payload) {
     "include_meta",
     "include_result_meta",
   ];
+  const scholarParameterOrder = [
+    "queries",
+    "queries[] as string",
+    "country",
+    "language",
+    "max_queries",
+    "include_meta",
+    "include_result_meta",
+  ];
+  const patentsParameterOrder = [
+    "queries",
+    "queries[] as string",
+    "max_queries",
+    "include_meta",
+    "include_result_meta",
+  ];
   const shoppingParameterOrder = [
     "queries",
     "queries[] as string",
@@ -1000,6 +1213,10 @@ function printCapabilityHelp(payload) {
   ];
   const preferredParameterOrder = payload.capability === "search"
     ? searchParameterOrder
+    : payload.capability === "scholar"
+      ? scholarParameterOrder
+    : payload.capability === "patents"
+      ? patentsParameterOrder
     : payload.capability === "shopping"
       ? shoppingParameterOrder
       : payload.capability === "places"
@@ -1346,6 +1563,56 @@ async function youtubeTranscript(args) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function fetchPage(args) {
+  const body = await readJsonCommandInput(args, "fetch page");
+  const url = normalizeHttpUrl(body.url);
+  if (!url) fail("Error: url is required and must be an http or https URL.");
+
+  const includeHtml = normalizeBoolean(body.include_html, false);
+  const maxChars = normalizeMaxChars(body.max_chars, 12000, 50000);
+  const htmlMaxChars = normalizeMaxChars(body.html_max_chars, maxChars, 50000);
+
+  let page;
+  try {
+    page = await localFetchPage(url, "local page fetch");
+  } catch (error) {
+    fail(`Error: ${error.message}`);
+  }
+
+  const title = extractHtmlTitle(page.text);
+  const description = extractMetaContent(page.text, "description")
+    || extractMetaContent(page.text, "og:description");
+  const text = htmlToReadableText(page.text).slice(0, maxChars);
+
+  process.stdout.write(`${JSON.stringify({
+    action: "page",
+    local: true,
+    billing: { credits_used: 0 },
+    url,
+    final_url: page.url,
+    content_type: page.contentType || null,
+    title: title || null,
+    description: description || null,
+    text,
+    ...(includeHtml ? { html: page.text.slice(0, htmlMaxChars) } : {}),
+  }, null, 2)}\n`);
+}
+
+async function commandFetch(args) {
+  const sub = args[0];
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    process.stdout.write(FETCH_HELP);
+    return;
+  }
+
+  if (sub === "page") {
+    await fetchPage(args.slice(1));
+    return;
+  }
+
+  fail("Error: fetch actions are: page.");
+}
+
 async function commandYouTube(args) {
   const sub = args[0];
   if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
@@ -1451,6 +1718,10 @@ async function commandHelp(args) {
   }
   if (capability === "reddit") {
     process.stdout.write(REDDIT_HELP);
+    return;
+  }
+  if (capability === "fetch") {
+    process.stdout.write(FETCH_HELP);
     return;
   }
   if (capability === "youtube") {
@@ -1671,6 +1942,11 @@ async function main() {
 
   if (cmd === "reddit") {
     await commandReddit(args.slice(1));
+    return;
+  }
+
+  if (cmd === "fetch") {
+    await commandFetch(args.slice(1));
     return;
   }
 
