@@ -235,6 +235,39 @@ examples:
   caphub weather forecast '{"location":"Bangkok","days":1}'
 `;
 
+const LOCAL_CLI_ACTIONS = [
+  {
+    command: "fetch page",
+    summary: "Read a known public webpage directly from this machine without a browser loop.",
+    credits: "0 credits",
+    routing: "known public URL -> caphub fetch page",
+  },
+  {
+    command: "reddit feed",
+    summary: "Read the latest or top posts from a known subreddit locally.",
+    credits: "0 credits",
+    routing: "known subreddit -> caphub reddit feed",
+  },
+  {
+    command: "reddit post",
+    summary: "Read a known Reddit post and its comments locally.",
+    credits: "0 credits",
+    routing: "known Reddit post id/url -> caphub reddit post",
+  },
+  {
+    command: "reddit user",
+    summary: "Read a known Reddit user's posts or comments locally.",
+    credits: "0 credits",
+    routing: "known Reddit username -> caphub reddit user",
+  },
+  {
+    command: "youtube transcript",
+    summary: "Pull a transcript from a known YouTube video locally when this machine can reach YouTube.",
+    credits: "0 credits",
+    routing: "known YouTube video id/url + local network path -> caphub youtube transcript",
+  },
+];
+
 class ApiError extends Error {
   constructor(message, status = 0, data = null) {
     super(message);
@@ -930,8 +963,11 @@ function printCapabilities(payload) {
   const lines = [
     "caphub capabilities",
     "",
-    "Live capabilities available through the current API.",
+    "Capabilities available through Caphub from this CLI.",
+    "This list includes server capabilities plus local CLI actions that agents can use directly.",
     "Use 'caphub help <capability>' before first use.",
+    "",
+    "API and hybrid capabilities:",
     "",
   ];
   for (const capability of payload.capabilities || []) {
@@ -939,6 +975,14 @@ function printCapabilities(payload) {
     if (capability.credits) lines.push(`  credits: ${capability.credits}`);
     if (capability.limits?.max_queries_per_request) lines.push(`  max queries: ${capability.limits.max_queries_per_request}`);
     if (capability.endpoint) lines.push(`  endpoint: ${capability.endpoint}`);
+    lines.push("");
+  }
+  lines.push("Local CLI actions:");
+  lines.push("");
+  for (const action of LOCAL_CLI_ACTIONS) {
+    lines.push(`${action.command} - ${action.summary}`);
+    lines.push(`  credits: ${action.credits}`);
+    lines.push(`  use when: ${action.routing}`);
     lines.push("");
   }
   process.stdout.write(lines.join("\n"));
