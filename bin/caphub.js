@@ -256,36 +256,190 @@ examples:
   caphub travel flights '{"tripType":"round-trip","origin":"BKK","destination":"HND","departDate":"2026-06-01","returnDate":"2026-06-10","cabinClass":"business","adults":1}'
 `;
 
-const LOCAL_CLI_ACTIONS = [
+const CAPABILITY_GROUPS = [
   {
-    command: "fetch page",
-    summary: "Read a known public webpage directly from this machine without a browser loop.",
-    credits: "0 credits",
-    routing: "known public URL -> caphub fetch page",
+    title: "Web",
+    actions: [
+      {
+        command: "search",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use when the agent needs compact cited web research fast.",
+      },
+      {
+        command: "search-ideas",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use before full search to widen query planning.",
+      },
+      {
+        command: "fetch page",
+        execution: "local",
+        cost: "free",
+        summary: "Use for a known public URL when search is already done.",
+      },
+    ],
   },
   {
-    command: "reddit feed",
-    summary: "Read the latest or top posts from a known subreddit locally.",
-    credits: "0 credits",
-    routing: "known subreddit -> caphub reddit feed",
+    title: "Research",
+    actions: [
+      {
+        command: "scholar",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use for papers, citations, and academic sources.",
+      },
+      {
+        command: "patents",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use for prior art, assignees, and filing details.",
+      },
+      {
+        command: "shopping",
+        execution: "server",
+        cost: "2 credits/query",
+        summary: "Use to compare products, retailers, prices, and ratings.",
+      },
+    ],
   },
   {
-    command: "reddit post",
-    summary: "Read a known Reddit post and its comments locally.",
-    credits: "0 credits",
-    routing: "known Reddit post id/url -> caphub reddit post",
+    title: "Social",
+    actions: [
+      {
+        command: "reddit search",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use to discover relevant Reddit discussions by topic.",
+      },
+      {
+        command: "reddit feed",
+        execution: "local",
+        cost: "free",
+        summary: "Use when the subreddit is already known.",
+      },
+      {
+        command: "reddit post",
+        execution: "local",
+        cost: "free",
+        summary: "Use when the Reddit post URL or ID is already known.",
+      },
+      {
+        command: "reddit user",
+        execution: "local",
+        cost: "free",
+        summary: "Use when the Reddit username is already known.",
+      },
+    ],
   },
   {
-    command: "reddit user",
-    summary: "Read a known Reddit user's posts or comments locally.",
-    credits: "0 credits",
-    routing: "known Reddit username -> caphub reddit user",
+    title: "Video",
+    actions: [
+      {
+        command: "youtube search",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use to find relevant YouTube videos by topic.",
+      },
+      {
+        command: "youtube transcript",
+        execution: "local",
+        cost: "free",
+        summary: "Use for a known video when this machine can reach YouTube.",
+      },
+      {
+        command: "youtube transcript-server",
+        execution: "server",
+        cost: "2 credits",
+        summary: "Use when transcript fetch must run on hosted infrastructure.",
+      },
+      {
+        command: "youtube channel-resolve",
+        execution: "server",
+        cost: "free",
+        summary: "Use to turn a handle or URL into a channel ID.",
+      },
+      {
+        command: "youtube channel-search",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use to search within one creator or channel.",
+      },
+      {
+        command: "youtube channel-videos",
+        execution: "server",
+        cost: "1 credit/page",
+        summary: "Use to enumerate uploads from a known channel.",
+      },
+      {
+        command: "youtube channel-latest",
+        execution: "server",
+        cost: "free",
+        summary: "Use to get the latest videos from a known channel.",
+      },
+      {
+        command: "youtube playlist-videos",
+        execution: "server",
+        cost: "1 credit/page",
+        summary: "Use to enumerate videos from a playlist.",
+      },
+    ],
   },
   {
-    command: "youtube transcript",
-    summary: "Pull a transcript from a known YouTube video locally when this machine can reach YouTube.",
-    credits: "0 credits",
-    routing: "known YouTube video id/url + local network path -> caphub youtube transcript",
+    title: "Finance",
+    actions: [
+      {
+        command: "finance news",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use for the latest news on known stock tickers.",
+      },
+    ],
+  },
+  {
+    title: "Maps",
+    actions: [
+      {
+        command: "maps search",
+        execution: "server",
+        cost: "3 credits",
+        summary: "Use to find a category of place in a named area.",
+      },
+      {
+        command: "maps places",
+        execution: "server",
+        cost: "1 credit/query",
+        summary: "Use when the place query already includes the location.",
+      },
+      {
+        command: "maps reviews",
+        execution: "server",
+        cost: "1 credit/CID",
+        summary: "Use after selecting a place and needing reviews.",
+      },
+    ],
+  },
+  {
+    title: "Travel",
+    actions: [
+      {
+        command: "travel flights",
+        execution: "server",
+        cost: "5 credits",
+        summary: "Use to compare flight offers before final booking.",
+      },
+    ],
+  },
+  {
+    title: "Weather",
+    actions: [
+      {
+        command: "weather forecast",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use for rain and temperature by place name.",
+      },
+    ],
   },
 ];
 
@@ -984,27 +1138,28 @@ function printCapabilities(payload) {
   const lines = [
     "caphub capabilities",
     "",
-    "Capabilities available through Caphub from this CLI.",
-    "This list includes server capabilities plus local CLI actions that agents can use directly.",
+    "Agent-facing commands available through this CLI.",
+    "Each action shows execution mode, cost, and when to use it.",
     "Use 'caphub help <capability>' before first use.",
-    "",
-    "API and hybrid capabilities:",
-    "",
   ];
-  for (const capability of payload.capabilities || []) {
-    lines.push(`/${capability.capability} - ${capability.purpose}`);
-    if (capability.credits) lines.push(`  credits: ${capability.credits}`);
-    if (capability.limits?.max_queries_per_request) lines.push(`  max queries: ${capability.limits.max_queries_per_request}`);
-    if (capability.endpoint) lines.push(`  endpoint: ${capability.endpoint}`);
+
+  const liveCapabilities = new Set((payload.capabilities || []).map((item) => item.capability));
+
+  for (const group of CAPABILITY_GROUPS) {
+    const actions = group.actions.filter((action) => {
+      const root = action.command.split(" ")[0];
+      if (action.execution === "local") return true;
+      return liveCapabilities.has(root);
+    });
+    if (!actions.length) continue;
+
     lines.push("");
-  }
-  lines.push("Local CLI actions:");
-  lines.push("");
-  for (const action of LOCAL_CLI_ACTIONS) {
-    lines.push(`${action.command} - ${action.summary}`);
-    lines.push(`  credits: ${action.credits}`);
-    lines.push(`  use when: ${action.routing}`);
+    lines.push(`${group.title}:`);
     lines.push("");
+    for (const action of actions) {
+      lines.push(`${action.command}  [${action.execution}]  ${action.cost}`);
+      lines.push(`  ${action.summary}`);
+    }
   }
   process.stdout.write(lines.join("\n"));
 }
