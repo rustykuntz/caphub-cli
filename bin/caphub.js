@@ -49,13 +49,14 @@ commands:
   youtube transcript <json> fetch YouTube transcript locally; free
   finance news <json>   fetch recent stock ticker news server-side; costs credits
   maps search <json>    search Google Maps in a named area server-side; costs credits
+  travel flights <json> search flights server-side; costs credits
   weather forecast <json> fetch daily weather forecast by place name server-side; costs credits
 
 agent workflow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|youtube|finance|maps|weather <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|youtube|finance|maps|travel|weather <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -89,6 +90,7 @@ examples:
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
   caphub maps places '{"queries":["best pizza in Vienna"]}'
   caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
+  caphub travel flights '{"origin":"VIE","destination":"LHR","departDate":"2026-05-10"}'
   caphub weather forecast '{"location":"Koh Phangan","days":3}'
 `;
 
@@ -233,6 +235,25 @@ agent routing:
 examples:
   caphub weather forecast '{"location":"Koh Phangan","days":3}'
   caphub weather forecast '{"location":"Bangkok","days":1}'
+`;
+
+const TRAVEL_HELP = `caphub travel
+
+Server-side travel capability.
+
+Use travel flights when the agent needs to compare flight offers for a route and dates during research or planning, then hand off to a browser only for final checkout if needed.
+
+commands:
+  travel flights <json>  Search flights server-side; requires auth; 5 credits
+
+agent routing:
+  compare flight options for a route and dates      caphub travel flights
+  research travel before booking                    caphub travel flights
+  final checkout or booking                         use the browser after research
+
+examples:
+  caphub travel flights '{"origin":"VIE","destination":"LHR","departDate":"2026-05-10"}'
+  caphub travel flights '{"tripType":"round-trip","origin":"BKK","destination":"HND","departDate":"2026-06-01","returnDate":"2026-06-10","cabinClass":"business","adults":1}'
 `;
 
 const LOCAL_CLI_ACTIONS = [
@@ -1587,6 +1608,20 @@ async function weatherServerAction(action, args, { requiresAuth = true } = {}) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function travelServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `travel ${action}`);
+  const apiKey = getApiKey();
+  if (requiresAuth && !apiKey) {
+    fail(`Error: travel ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+  const payload = await fetchJson(`${getApiUrl()}/v1/travel/${action}`, {
+    method: "POST",
+    apiKey,
+    body,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function youtubeServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `youtube ${action}`);
   const apiKey = getApiKey();
@@ -1753,6 +1788,21 @@ async function commandWeather(args) {
   fail("Error: weather actions are: forecast.");
 }
 
+async function commandTravel(args) {
+  const sub = args[0];
+  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+    process.stdout.write(TRAVEL_HELP);
+    return;
+  }
+
+  if (sub === "flights") {
+    await travelServerAction("flights", args.slice(1));
+    return;
+  }
+
+  fail("Error: travel actions are: flights.");
+}
+
 async function commandHelp(args) {
   const apiUrl = getApiUrl();
   const capability = args[0];
@@ -1782,6 +1832,10 @@ async function commandHelp(args) {
   }
   if (capability === "weather") {
     process.stdout.write(WEATHER_HELP);
+    return;
+  }
+  if (capability === "travel") {
+    process.stdout.write(TRAVEL_HELP);
     return;
   }
 
@@ -2011,6 +2065,11 @@ async function main() {
 
   if (cmd === "weather") {
     await commandWeather(args.slice(1));
+    return;
+  }
+
+  if (cmd === "travel") {
+    await commandTravel(args.slice(1));
     return;
   }
 
