@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lookup } from "node:dns/promises";
 import os from "node:os";
+import { isIP } from "node:net";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
@@ -13,11 +15,16 @@ const DEFAULT_API_URL = "https://api.caphub.io";
 const CONFIG_DIR = resolve(os.homedir(), ".config", "caphub");
 const CONFIG_PATH = resolve(CONFIG_DIR, "config.json");
 const LOCAL_FETCH_TIMEOUT_MS = 16000;
+const LOCAL_FETCH_MAX_REDIRECTS = 5;
+const DEFAULT_QUEUE_MAX_POSITIONS = 15;
+const DEFAULT_QUEUE_MAX_WAIT_MS = 60_000;
+const DEFAULT_QUEUE_MIN_POLL_MS = 1000;
+const DEFAULT_QUEUE_MAX_POLL_MS = 2500;
 const REDDIT_BASE_URL = "https://www.reddit.com";
 const YOUTUBE_BASE_URL = "https://www.youtube.com";
 
 const LOCAL_FETCH_HEADERS = {
-  Accept: "application/json, text/html;q=0.9, */*;q=0.8",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
   "Accept-Language": "en-US,en;q=0.9",
   "Cache-Control": "max-age=0",
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
@@ -45,18 +52,25 @@ commands:
   reddit feed <json>    fetch subreddit feed locally; free
   reddit post <json>    fetch post content and comments locally; free
   reddit user <json>    fetch user posts or comments locally; free
+  x user <json>         fetch compact X profile data server-side; costs credits
+  x tweets <json>       fetch compact X tweets server-side; costs credits
   youtube search <json> search YouTube videos server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
   finance news <json>   fetch recent stock ticker news server-side; costs credits
   maps search <json>    search Google Maps in a named area server-side; costs credits
+  cost daily <json>     fetch daily CapHub cost breakdown server-side; 0 credits
+  cost log <json>       fetch recent CapHub usage log server-side; 0 credits
+  travel resolve <json> resolve airport/city inputs server-side; costs credits
   travel flights <json> search flights server-side; costs credits
+  jobs indeed <json>    search Indeed jobs server-side; costs credits
+  jobs linkedin <json>  search LinkedIn jobs server-side; costs credits
   weather forecast <json> fetch daily weather forecast by place name server-side; costs credits
 
-agent workflow:
+recommended flow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|youtube|finance|maps|travel|weather <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|x|jobs|youtube|finance|maps|cost|travel|weather <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -80,17 +94,27 @@ examples:
   caphub search '{"queries":["best AI agent frameworks 2026"]}'
   caphub fetch page '{"url":"https://example.com"}'
   caphub scholar '{"queries":["faster skin regeneration"],"country":"us","language":"en"}'
-  caphub patents '{"queries":["faster skin regeneration"]}'
+  caphub patents '{"queries":["faster skin regeneration"],"include_figures":false}'
   caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'
   caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA"}'
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
+  caphub x user '{"username":"elonmusk"}'
+  caphub x tweets '{"username":"MrBeast","count":10}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub finance news '{"queries":["NVDA","AAPL"]}'
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
   caphub maps places '{"queries":["best pizza in Vienna"]}'
   caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
-  caphub travel flights '{"origin":"VIE","destination":"LHR","departDate":"2026-05-10"}'
+  caphub cost daily '{"days":30}'
+  caphub cost log '{"limit":50}'
+  caphub travel resolve '{"query":"Heathrow","country":"GB"}'
+  caphub travel flights '{"tripType":"round-trip","origin":"LHR","destination":"JFK","departDate":"2026-06-01","returnDate":"2026-06-08","cabinClass":"business","adults":1}'
+  caphub travel flights '{"tripType":"one-way","origin":"LHR","destination":"JFK","departDate":"2026-06-01","cabinClass":"business","adults":1}'
+  caphub jobs indeed '{"query":"United Nations programme officer","country":"us","location":"New York","sort_by":"relevance"}'
+  caphub jobs indeed '{"query":"sports software engineer","country":"us","location":"Remote","sort_by":"date"}'
+  caphub jobs linkedin '{"query":"English teacher","location":"Bangkok","date_posted":"month"}'
+  caphub jobs linkedin '{"query":"growth marketing manager","location":"Singapore","workplace_types":["remote","hybrid"],"experience_levels":["associate","mid_senior"],"employment_types":["fulltime"]}'
   caphub weather forecast '{"location":"Koh Phangan","days":3}'
 `;
 
@@ -98,12 +122,12 @@ const FETCH_HELP = `caphub fetch
 
 Local page fetch capability.
 
-Use fetch page when the agent needs to read a public webpage directly from this machine without using a browser loop. This is useful for pulling the main text from known URLs before deciding whether a fuller browser flow is needed.
+Use fetch page when you need a public webpage read directly from this machine without using a browser loop. This is useful for pulling the main text from known URLs before deciding whether a fuller browser flow is needed.
 
 commands:
   fetch page <json>  Fetch a public webpage locally; no auth; 0 credits
 
-agent routing:
+routing:
   known public webpage URL                    caphub fetch page
   search or discovery first                   use caphub search before fetch page
   pages behind login or heavy interaction     use the browser instead
@@ -117,7 +141,7 @@ const REDDIT_HELP = `caphub reddit
 
 Hybrid Reddit capability.
 
-Use Reddit when the agent needs to discover what people are saying, then read posts, comments, and user history efficiently. Reddit search runs server-side and costs credits. Feed, post, and user reads run locally and cost 0 credits.
+Use Reddit when you need discovery of what people are saying, then posts, comments, and user history efficiently. Reddit search runs server-side and costs credits. Feed, post, and user reads run locally and cost 0 credits.
 
 commands:
   reddit search <json>  Search Reddit posts server-side; requires auth; 1 credit
@@ -125,7 +149,7 @@ commands:
   reddit post <json>    Fetch post content and comments locally; no auth; 0 credits
   reddit user <json>    Fetch user posts or comments locally; no auth; 0 credits
 
-agent routing:
+routing:
   latest/top posts in a known subreddit    caphub reddit feed
   known Reddit post ID or URL              caphub reddit post
   known Reddit username                    caphub reddit user
@@ -139,11 +163,75 @@ examples:
   caphub reddit user '{"username":"Ok-Contribution9043","type":"comments","limit":10}'
 `;
 
+const X_HELP = `caphub x
+
+Server-side X capability.
+
+Use X when you need compact profile data, tweets, media, follower or following lists, comments on a post, or search results from X/Twitter without dragging the provider's full GraphQL payload into context.
+
+queue behavior:
+  when X is busy, the CLI auto-waits and polls for a slot instead of forcing manual retry loops
+  default queue policy waits up to 60s while there are at most 15 requests ahead
+
+commands:
+  x user <json>       Fetch one or more X profiles server-side; requires auth; 1 credit
+  x tweets <json>     Fetch tweets from a user server-side; requires auth; 1 credit
+  x media <json>      Fetch media tweets from a user server-side; requires auth; 1 credit
+  x followers <json>  Fetch followers from a user server-side; requires auth; 1 credit
+  x following <json>  Fetch following from a user server-side; requires auth; 1 credit
+  x comments <json>   Fetch comments for a known post server-side; requires auth; 1 credit
+  x search <json>     Search X posts and people server-side; requires auth; 1 credit
+
+routing:
+  known username or user id                   caphub x user
+  authored posts from one account             caphub x tweets
+  only posts with media from one account      caphub x media
+  inspect audience or network                 caphub x followers / caphub x following
+  known post id reply thread                  caphub x comments
+  broad topic discovery on X                  caphub x search
+
+examples:
+  caphub x user '{"username":"elonmusk"}'
+  caphub x user '{"ids":["2455740283","44196397"]}'
+  caphub x tweets '{"username":"MrBeast","count":10}'
+  caphub x media '{"username":"MrBeast","count":10}'
+  caphub x followers '{"user_id":"2455740283","count":20}'
+  caphub x following '{"user_id":"2455740283","count":20}'
+  caphub x comments '{"post_id":"2037151073639563267","count":20}'
+  caphub x search '{"query":"bangkok","type":"Top","count":10}'
+`;
+
+const JOBS_HELP = `caphub jobs
+
+Server-side jobs capability.
+
+Use jobs indeed when you need description-rich job discovery in one call. Use jobs linkedin when you need richer LinkedIn filters such as workplace type, experience level, employment type, or organization IDs.
+
+commands:
+  jobs indeed <json>    Search Indeed jobs server-side; requires auth; 1 credit
+  jobs linkedin <json>  Search LinkedIn jobs server-side; requires auth; 1 credit
+
+routing:
+  description-rich job search in one call         caphub jobs indeed
+  LinkedIn filters like remote or hybrid          caphub jobs linkedin
+  organization-based LinkedIn filtering           caphub jobs linkedin
+
+notes:
+  Indeed descriptions are trimmed to 5000 characters.
+  Some normalized filters are LinkedIn-only. With include_meta true, ignored_filters shows what was not applied.
+
+examples:
+  caphub jobs indeed '{"query":"United Nations programme officer","country":"us","location":"New York","sort_by":"relevance"}'
+  caphub jobs indeed '{"query":"sports software engineer","country":"us","location":"Remote","sort_by":"date"}'
+  caphub jobs linkedin '{"query":"English teacher","location":"Bangkok","date_posted":"month"}'
+  caphub jobs linkedin '{"query":"growth marketing manager","location":"Singapore","workplace_types":["remote","hybrid"],"experience_levels":["associate","mid_senior"],"employment_types":["fulltime"]}'
+`;
+
 const YOUTUBE_HELP = `caphub youtube
 
 Hybrid YouTube capability.
 
-Use YouTube when the agent needs relevant videos, creator or playlist context, or a transcript from a known video. Local transcript reads are free when the machine can reach YouTube directly. Server-side search, channel, playlist, and transcript fallback actions are available when discovery or hosted access is needed.
+Use YouTube when you need relevant videos, creator or playlist context, or a transcript from a known video. Local transcript reads are free when the machine can reach YouTube directly. Server-side search, channel, playlist, and transcript fallback actions are available when discovery or hosted access is needed.
 
 commands:
   youtube transcript <json>         Fetch transcript locally; no auth; 0 credits
@@ -155,7 +243,7 @@ commands:
   youtube channel-latest <json>     Fetch latest 15 channel videos server-side; requires auth; 0 credits
   youtube playlist-videos <json>    List playlist videos page-by-page server-side; requires auth; 1 credit per page
 
-agent routing:
+routing:
   known video id/url + local machine            caphub youtube transcript
   known video id/url + no local network path    caphub youtube transcript-server
   topic discovery across YouTube                caphub youtube search
@@ -181,12 +269,12 @@ const FINANCE_HELP = `caphub finance
 
 Server-side finance capability.
 
-Use finance news when the agent needs the latest coverage for a stock ticker such as NVDA, AAPL, or BRK.B. This endpoint is server-only, requires auth, and costs 1 credit per ticker query.
+Use finance news when you need the latest coverage for a stock ticker such as NVDA, AAPL, or BRK.B. This endpoint is server-only, requires auth, and costs 1 credit per ticker query.
 
 commands:
   finance news <json>  Fetch recent ticker news server-side; requires auth; 1 credit per ticker
 
-agent routing:
+routing:
   recent headlines for a known stock ticker      caphub finance news
   non-ticker company research                    use caphub search instead
 
@@ -199,14 +287,14 @@ const MAPS_HELP = `caphub maps
 
 Server-side maps capability.
 
-Use maps when the agent needs to find the best places in an area, search for restaurants or services, or inspect reviews before making a recommendation.
+Use maps when you need the best places in an area, restaurants or services, or reviews before a recommendation.
 
 commands:
   maps search <json>   Search Google Maps in a named area server-side; requires auth; 3 credits
   maps places <json>   Search places by text query server-side; requires auth; 1 credit per query
   maps reviews <json>  Fetch place reviews by CID server-side; requires auth; 1 credit per CID
 
-agent routing:
+routing:
   category or business type in a named area       caphub maps search
   exact place text search with location phrase    caphub maps places
   reviews for known place CID                     caphub maps reviews
@@ -222,12 +310,12 @@ const WEATHER_HELP = `caphub weather
 
 Server-side weather capability.
 
-Use weather forecast when the agent needs rain and temperature for a place before making plans or recommendations. This endpoint is server-only, requires auth, and costs 1 credit per request.
+Use weather forecast when you need rain and temperature for a place before making plans or recommendations. This endpoint is server-only, requires auth, and costs 1 credit per request.
 
 commands:
   weather forecast <json>  Fetch daily weather forecast by place name server-side; requires auth; 1 credit
 
-agent routing:
+routing:
   rain and temperature for a named place         caphub weather forecast
   location is already a city/area name           caphub weather forecast
   local business discovery                       use caphub maps instead
@@ -237,23 +325,47 @@ examples:
   caphub weather forecast '{"location":"Bangkok","days":1}'
 `;
 
+const COST_HELP = `caphub cost
+
+Server-side cost management capability.
+
+Use cost daily when you need a compact day-by-day spend breakdown by category. Use cost log when you need the recent billed event log with timestamps, endpoint names, response times, credits, and dollar-equivalent cost.
+
+commands:
+  cost daily <json>  Fetch daily cost breakdown server-side; requires auth; 0 credits
+  cost log <json>    Fetch recent cost log server-side; requires auth; 0 credits
+
+routing:
+  budget and trend tracking by day                 caphub cost daily
+  recent billed event inspection                   caphub cost log
+  plan next calls around remaining spend           use cost daily before more paid calls
+
+examples:
+  caphub cost daily '{"days":30}'
+  caphub cost log '{"limit":50}'
+`;
+
 const TRAVEL_HELP = `caphub travel
 
 Server-side travel capability.
 
-Use travel flights when the agent needs to compare flight offers for a route and dates during research or planning, then hand off to a browser only for final checkout if needed.
+Use travel flights when you need one-way or round-trip flight offers compared for a route and dates during research or planning, then hand off to a browser only for final checkout if needed.
 
 commands:
+  travel resolve <json>  Resolve airport code, airport name, or city/municipality to candidate airports; requires auth; 1 credit
   travel flights <json>  Search flights server-side; requires auth; 5 credits
 
-agent routing:
+routing:
+  city name, airport name, or unknown airport code     caphub travel resolve
   compare flight options for a route and dates      caphub travel flights
   research travel before booking                    caphub travel flights
   final checkout or booking                         use the browser after research
 
 examples:
-  caphub travel flights '{"origin":"VIE","destination":"LHR","departDate":"2026-05-10"}'
-  caphub travel flights '{"tripType":"round-trip","origin":"BKK","destination":"HND","departDate":"2026-06-01","returnDate":"2026-06-10","cabinClass":"business","adults":1}'
+  caphub travel resolve '{"query":"Heathrow","country":"GB"}'
+  caphub travel resolve '{"query":"JFK","country":"US"}'
+  caphub travel flights '{"tripType":"round-trip","origin":"LHR","destination":"JFK","departDate":"2026-06-01","returnDate":"2026-06-08","cabinClass":"business","adults":1}'
+  caphub travel flights '{"tripType":"one-way","origin":"LHR","destination":"JFK","departDate":"2026-06-01","cabinClass":"business","adults":1}'
 `;
 
 const CAPABILITY_GROUPS = [
@@ -264,7 +376,7 @@ const CAPABILITY_GROUPS = [
         command: "search",
         execution: "server",
         cost: "1 credit/query",
-        summary: "Use when the agent needs compact cited web research fast.",
+        summary: "Use when you need compact cited web research fast.",
       },
       {
         command: "search-ideas",
@@ -276,7 +388,7 @@ const CAPABILITY_GROUPS = [
         command: "fetch page",
         execution: "local",
         cost: "free",
-        summary: "Use for a known public URL when search is already done.",
+        summary: "Use when you already have a public URL and search is done.",
       },
     ],
   },
@@ -287,19 +399,19 @@ const CAPABILITY_GROUPS = [
         command: "scholar",
         execution: "server",
         cost: "1 credit/query",
-        summary: "Use for papers, citations, and academic sources.",
+        summary: "Use when you need papers, citations, or academic sources.",
       },
       {
         command: "patents",
         execution: "server",
-        cost: "1 credit/query",
-        summary: "Use for prior art, assignees, and filing details.",
+        cost: "1 to 3 credits/query",
+        summary: "Use when you need prior art, assignees, or filing details.",
       },
       {
         command: "shopping",
         execution: "server",
         cost: "2 credits/query",
-        summary: "Use to compare products, retailers, prices, and ratings.",
+        summary: "Use when you need products, retailers, prices, and ratings compared.",
       },
     ],
   },
@@ -307,10 +419,40 @@ const CAPABILITY_GROUPS = [
     title: "Social",
     actions: [
       {
+        command: "x user",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need a compact X profile by username or id.",
+      },
+      {
+        command: "x tweets",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need recent tweets from a known X account.",
+      },
+      {
+        command: "x media",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need only media tweets from a known X account.",
+      },
+      {
+        command: "x comments",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need replies on a known X post.",
+      },
+      {
+        command: "x search",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need compact X people and posts by query.",
+      },
+      {
         command: "reddit search",
         execution: "server",
         cost: "1 credit",
-        summary: "Use to discover relevant Reddit discussions by topic.",
+        summary: "Use when you need relevant Reddit discussions by topic.",
       },
       {
         command: "reddit feed",
@@ -333,19 +475,36 @@ const CAPABILITY_GROUPS = [
     ],
   },
   {
+    title: "Jobs",
+    actions: [
+      {
+        command: "jobs indeed",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need description-rich job search in one call.",
+      },
+      {
+        command: "jobs linkedin",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need richer LinkedIn job filters.",
+      },
+    ],
+  },
+  {
     title: "Video",
     actions: [
       {
         command: "youtube search",
         execution: "server",
         cost: "1 credit/query",
-        summary: "Use to find relevant YouTube videos by topic.",
+        summary: "Use when you need relevant YouTube videos by topic.",
       },
       {
         command: "youtube transcript",
         execution: "local",
         cost: "free",
-        summary: "Use for a known video when this machine can reach YouTube.",
+        summary: "Use when you already have a video and this machine can reach YouTube.",
       },
       {
         command: "youtube transcript-server",
@@ -357,31 +516,31 @@ const CAPABILITY_GROUPS = [
         command: "youtube channel-resolve",
         execution: "server",
         cost: "free",
-        summary: "Use to turn a handle or URL into a channel ID.",
+        summary: "Use when you need a handle or URL turned into a channel ID.",
       },
       {
         command: "youtube channel-search",
         execution: "server",
         cost: "1 credit",
-        summary: "Use to search within one creator or channel.",
+        summary: "Use when you need search within one creator or channel.",
       },
       {
         command: "youtube channel-videos",
         execution: "server",
         cost: "1 credit/page",
-        summary: "Use to enumerate uploads from a known channel.",
+        summary: "Use when you need uploads from a known channel enumerated.",
       },
       {
         command: "youtube channel-latest",
         execution: "server",
         cost: "free",
-        summary: "Use to get the latest videos from a known channel.",
+        summary: "Use when you need the latest videos from a known channel.",
       },
       {
         command: "youtube playlist-videos",
         execution: "server",
         cost: "1 credit/page",
-        summary: "Use to enumerate videos from a playlist.",
+        summary: "Use when you need videos from a playlist enumerated.",
       },
     ],
   },
@@ -392,7 +551,7 @@ const CAPABILITY_GROUPS = [
         command: "finance news",
         execution: "server",
         cost: "1 credit/query",
-        summary: "Use for the latest news on known stock tickers.",
+        summary: "Use when you need the latest news on known stock tickers.",
       },
     ],
   },
@@ -403,7 +562,7 @@ const CAPABILITY_GROUPS = [
         command: "maps search",
         execution: "server",
         cost: "3 credits",
-        summary: "Use to find a category of place in a named area.",
+        summary: "Use when you need a category of place in a named area.",
       },
       {
         command: "maps places",
@@ -423,10 +582,33 @@ const CAPABILITY_GROUPS = [
     title: "Travel",
     actions: [
       {
+        command: "travel resolve",
+        execution: "server",
+        cost: "1 credit",
+        summary: "Use when you need city or airport text resolved before flight search.",
+      },
+      {
         command: "travel flights",
         execution: "server",
         cost: "5 credits",
-        summary: "Use to compare flight offers before final booking.",
+        summary: "Use when you need flight offers compared before final booking.",
+      },
+    ],
+  },
+  {
+    title: "Management",
+    actions: [
+      {
+        command: "cost daily",
+        execution: "server",
+        cost: "0 credits",
+        summary: "Use when you need daily CapHub spend by category.",
+      },
+      {
+        command: "cost log",
+        execution: "server",
+        cost: "0 credits",
+        summary: "Use when you need the recent billed usage log with timestamps and response times.",
       },
     ],
   },
@@ -437,7 +619,7 @@ const CAPABILITY_GROUPS = [
         command: "weather forecast",
         execution: "server",
         cost: "1 credit",
-        summary: "Use for rain and temperature by place name.",
+        summary: "Use when you need rain and temperature by place name.",
       },
     ],
   },
@@ -461,8 +643,17 @@ function readConfig() {
 }
 
 function writeConfig(config) {
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf8");
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(CONFIG_DIR, 0o700);
+  } catch {}
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  try {
+    chmodSync(CONFIG_PATH, 0o600);
+  } catch {}
 }
 
 function getApiUrl() {
@@ -518,6 +709,233 @@ function readStdin() {
   });
 }
 
+function sleepMs(ms) {
+  return new Promise((resolveSleep) => setTimeout(resolveSleep, Math.max(0, Math.floor(ms) || 0)));
+}
+
+function isBlockedFetchHostname(hostname) {
+  const host = String(hostname || "").trim().toLowerCase();
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "local" || host.endsWith(".local")) return true;
+  return false;
+}
+
+function isPrivateIpv4(address) {
+  const parts = String(address || "").split(".").map((item) => Number(item));
+  if (parts.length !== 4 || parts.some((item) => !Number.isInteger(item) || item < 0 || item > 255)) return true;
+  const [a, b] = parts;
+  if (a === 0 || a === 10 || a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+function isPrivateIpv6(address) {
+  const normalized = String(address || "").trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized === "::" || normalized === "::1") return true;
+  if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
+  if (normalized.startsWith("fe8") || normalized.startsWith("fe9") || normalized.startsWith("fea") || normalized.startsWith("feb")) {
+    return true;
+  }
+  const mapped = normalized.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isPrivateIpv4(mapped[1]);
+  return false;
+}
+
+function isPublicIpAddress(address) {
+  const version = isIP(address);
+  if (version === 4) return !isPrivateIpv4(address);
+  if (version === 6) return !isPrivateIpv6(address);
+  return false;
+}
+
+async function assertSafePublicHttpUrl(rawUrl) {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("URL is not valid");
+  }
+
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("URL must use http or https");
+  }
+  if (url.username || url.password) {
+    throw new Error("URL credentials are not allowed");
+  }
+  if (isBlockedFetchHostname(url.hostname)) {
+    throw new Error("URL hostname is not allowed");
+  }
+
+  const ipVersion = isIP(url.hostname);
+  if (ipVersion) {
+    if (!isPublicIpAddress(url.hostname)) throw new Error("URL hostname is not allowed");
+    return url;
+  }
+
+  let resolved = [];
+  try {
+    resolved = await lookup(url.hostname, { all: true, verbatim: true });
+  } catch {
+    throw new Error("URL hostname could not be resolved");
+  }
+  if (!resolved.length) {
+    throw new Error("URL hostname could not be resolved");
+  }
+  if (resolved.some((item) => !isPublicIpAddress(item?.address || ""))) {
+    throw new Error("URL hostname is not allowed");
+  }
+
+  return url;
+}
+
+async function fetchSafePublicUrl(rawUrl, init = {}) {
+  let current = await assertSafePublicHttpUrl(rawUrl);
+
+  for (let hop = 0; hop <= LOCAL_FETCH_MAX_REDIRECTS; hop += 1) {
+    const resp = await fetch(current.toString(), {
+      ...init,
+      redirect: "manual",
+    });
+
+    if (![301, 302, 303, 307, 308].includes(resp.status)) {
+      return resp;
+    }
+    if (hop === LOCAL_FETCH_MAX_REDIRECTS) {
+      throw new Error("too many redirects");
+    }
+
+    const location = resp.headers.get("location");
+    if (!location) {
+      throw new Error("redirect location is missing");
+    }
+    current = await assertSafePublicHttpUrl(new URL(location, current).toString());
+  }
+
+  throw new Error("too many redirects");
+}
+
+function normalizePositiveInteger(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(num)));
+}
+
+function readQueueSettings() {
+  const config = readConfig();
+  const raw = config.queue || {};
+  return {
+    maxPositions: normalizePositiveInteger(
+      process.env.CAPHUB_QUEUE_MAX_POSITIONS ?? raw.max_positions,
+      DEFAULT_QUEUE_MAX_POSITIONS,
+      { min: 1, max: 1000 },
+    ),
+    maxWaitMs: normalizePositiveInteger(
+      process.env.CAPHUB_QUEUE_MAX_WAIT_MS ?? raw.max_wait_ms,
+      DEFAULT_QUEUE_MAX_WAIT_MS,
+      { min: 1000, max: 10 * 60 * 1000 },
+    ),
+  };
+}
+
+function isHelpArg(value) {
+  return value === "--help" || value === "-h" || value === "help";
+}
+
+function isQueueResponse(error) {
+  return error instanceof ApiError
+    && error.status === 429
+    && error.data
+    && error.data.request_submitted === false
+    && Number.isFinite(Number(error.data.retry_after_ms || 0))
+    && Number.isFinite(Number(error.data.queue_position ?? error.data.queue_depth ?? -1));
+}
+
+function writeQueueStatus(text, { final = false } = {}) {
+  if (process.stderr.isTTY) {
+    process.stderr.write(`\r${text}\u001b[K`);
+    if (final) process.stderr.write("\n");
+    return;
+  }
+  process.stderr.write(`${text}\n`);
+}
+
+async function fetchJsonWithQueue(url, options, queueLabel) {
+  const settings = readQueueSettings();
+  const startedAt = Date.now();
+  let queued = false;
+
+  while (true) {
+    try {
+      const payload = await fetchJson(url, options);
+      if (queued) {
+        const waitedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+        writeQueueStatus(`${queueLabel}: slot acquired after ${waitedSeconds}s`, { final: true });
+      }
+      return payload;
+    } catch (error) {
+      if (!isQueueResponse(error)) throw error;
+
+      const queuePosition = Number(error.data.queue_position ?? error.data.queue_depth ?? 0);
+      const retryAfterMs = Number(error.data.retry_after_ms || DEFAULT_QUEUE_MIN_POLL_MS);
+      const elapsedMs = Date.now() - startedAt;
+
+      if (queuePosition > settings.maxPositions) {
+        if (queued) writeQueueStatus(`${queueLabel}: queue aborted`, { final: true });
+        throw new ApiError(
+          `queue too large (${queuePosition} ahead); request not submitted; no credits charged`,
+          error.status,
+          error.data,
+        );
+      }
+
+      const clampedDelayMs = Math.max(
+        DEFAULT_QUEUE_MIN_POLL_MS,
+        Math.min(DEFAULT_QUEUE_MAX_POLL_MS, retryAfterMs),
+      );
+      if (elapsedMs + clampedDelayMs > settings.maxWaitMs) {
+        if (queued) writeQueueStatus(`${queueLabel}: queue aborted`, { final: true });
+        throw new ApiError(
+          `queue wait would exceed ${Math.round(settings.maxWaitMs / 1000)}s; request not submitted; no credits charged`,
+          error.status,
+          error.data,
+        );
+      }
+
+      queued = true;
+      const waitedSeconds = (elapsedMs / 1000).toFixed(1);
+      writeQueueStatus(
+        `${queueLabel}: ${queuePosition} ahead in queue, retrying in ${(clampedDelayMs / 1000).toFixed(1)}s, waited ${waitedSeconds}s`,
+      );
+      await sleepMs(clampedDelayMs);
+    }
+  }
+}
+
+async function serverJsonAction(url, {
+  method = "POST",
+  body,
+  apiKey = "",
+  requiresAuth = true,
+  authLabel = "request",
+  queueLabel = authLabel,
+} = {}) {
+  if (requiresAuth && !apiKey) {
+    fail(`Error: ${authLabel} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+  return fetchJsonWithQueue(url, {
+    method,
+    apiKey,
+    body,
+  }, queueLabel);
+}
+
 async function fetchJson(url, { method = "GET", body, apiKey = "" } = {}) {
   const headers = { "Content-Type": "application/json" };
   if (apiKey) headers["X-API-Key"] = apiKey;
@@ -530,6 +948,9 @@ async function fetchJson(url, { method = "GET", body, apiKey = "" } = {}) {
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
   } catch (error) {
+    if (shouldFallbackToCurl(error)) {
+      return fetchJsonViaCurl(url, { method, body, apiKey, originalError: error });
+    }
     throw new ApiError(`request failed: ${error.message}`, 0, null);
   }
 
@@ -548,12 +969,85 @@ async function fetchJson(url, { method = "GET", body, apiKey = "" } = {}) {
   return data;
 }
 
+function shouldFallbackToCurl(error) {
+  const code = String(error?.cause?.code || "").toUpperCase();
+  return code === "ENOTFOUND" || code === "EAI_AGAIN" || code === "ECONNRESET" || code === "ETIMEDOUT";
+}
+
+function fetchJsonViaCurl(url, { method, body, apiKey, originalError }) {
+  return new Promise((resolveFetch, rejectFetch) => {
+    const statusMarker = "__CAPHUB_STATUS__";
+    const args = [
+      "-sS",
+      "-X",
+      method,
+      url,
+      "-H",
+      "Content-Type: application/json",
+      "-w",
+      `\n${statusMarker}%{http_code}`,
+    ];
+
+    if (apiKey) {
+      args.push("-H", `X-API-Key: ${apiKey}`);
+    }
+    if (body) {
+      args.push("--data", JSON.stringify(body));
+    }
+
+    const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+
+    child.on("error", () => {
+      rejectFetch(new ApiError(`request failed: ${originalError.message}`, 0, null));
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        const reason = stderr.trim() || originalError.message;
+        rejectFetch(new ApiError(`request failed: ${reason}`, 0, null));
+        return;
+      }
+
+      const markerIndex = stdout.lastIndexOf(`\n${statusMarker}`);
+      if (markerIndex === -1) {
+        rejectFetch(new ApiError(`request failed: invalid curl response from ${url}`, 0, null));
+        return;
+      }
+
+      const text = stdout.slice(0, markerIndex);
+      const statusText = stdout.slice(markerIndex + statusMarker.length + 1).trim();
+      const status = Number(statusText || 0);
+
+      let data;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        rejectFetch(new ApiError(`non-JSON response from ${url} (HTTP ${status || 0})`, status || 0, null));
+        return;
+      }
+
+      if (status < 200 || status >= 300) {
+        rejectFetch(new ApiError(data?.error || `HTTP ${status}`, status, data));
+        return;
+      }
+
+      resolveFetch(data);
+    });
+  });
+}
+
 async function localFetchJson(url) {
   let resp;
   try {
-    resp = await fetch(url, {
+    resp = await fetchSafePublicUrl(url, {
       headers: LOCAL_FETCH_HEADERS,
-      redirect: "follow",
       signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
@@ -582,9 +1076,8 @@ async function localFetchJson(url) {
 async function localFetchText(url, label) {
   let resp;
   try {
-    resp = await fetch(url, {
+    resp = await fetchSafePublicUrl(url, {
       headers: LOCAL_FETCH_HEADERS,
-      redirect: "follow",
       signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
@@ -609,9 +1102,8 @@ async function localFetchPage(url, label) {
   try {
     // Keep generic page fetches on the same local path as Reddit and YouTube:
     // browser-like headers, redirects, and timeout behavior improve success on public pages.
-    resp = await fetch(url, {
+    resp = await fetchSafePublicUrl(url, {
       headers: LOCAL_FETCH_HEADERS,
-      redirect: "follow",
       signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
@@ -640,12 +1132,12 @@ async function fetchYouTubeWatchPage(videoId) {
   const fetchHtml = async (cookie = "") => {
     let resp;
     try {
-      resp = await fetch(`${YOUTUBE_BASE_URL}/watch?v=${videoId}`, {
+      resp = await fetchSafePublicUrl(`${YOUTUBE_BASE_URL}/watch?v=${videoId}`, {
+        redirect: "manual",
         headers: {
           ...LOCAL_FETCH_HEADERS,
           ...(cookie ? { Cookie: cookie } : {}),
         },
-        redirect: "follow",
         signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
       });
     } catch (error) {
@@ -679,6 +1171,22 @@ async function readJsonCommandInput(args, label) {
   if (!rawInput.trim()) {
     fail(`Error: input JSON is required.\n\nnext:\n  - caphub ${label} --help`);
   }
+
+  try {
+    const parsed = JSON.parse(rawInput);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      fail(`Error: input must be a JSON object.\n\nnext:\n  - caphub ${label} --help`);
+    }
+    return parsed;
+  } catch {
+    fail(`Error: input must be valid JSON.\n\nnext:\n  - caphub ${label} --help\n  - pass exactly one JSON object`);
+  }
+}
+
+async function readOptionalJsonCommandInput(args, label) {
+  const arg = args[0];
+  const rawInput = arg ?? (process.stdin.isTTY ? "" : await readStdin());
+  if (!rawInput.trim()) return {};
 
   try {
     const parsed = JSON.parse(rawInput);
@@ -1139,7 +1647,7 @@ function printCapabilities(payload) {
     "caphub capabilities",
     "",
     "Agent-facing commands available through this CLI.",
-    "Each action shows execution mode, cost, and when to use it.",
+    "Each action shows mode, cost, and when to use it.",
     "Use 'caphub help <capability>' before first use.",
   ];
 
@@ -1154,14 +1662,19 @@ function printCapabilities(payload) {
     if (!actions.length) continue;
 
     lines.push("");
-    lines.push(`${group.title}:`);
+    lines.push(group.title);
     lines.push("");
+    const commandWidth = Math.max(...actions.map((action) => action.command.length));
+    const executionWidth = Math.max(...actions.map((action) => action.execution.length));
     for (const action of actions) {
-      lines.push(`${action.command}  [${action.execution}]  ${action.cost}`);
-      lines.push(`  ${action.summary}`);
+      const command = action.command.padEnd(commandWidth);
+      const execution = action.execution.padEnd(executionWidth);
+      lines.push(`  ${command}   ${execution}   ${action.cost}`);
+      lines.push(`    ${action.summary}`);
+      lines.push("");
     }
   }
-  process.stdout.write(lines.join("\n"));
+  process.stdout.write(`${lines.join("\n").trimEnd()}\n`);
 }
 
 function printCapabilityHelp(payload) {
@@ -1169,21 +1682,32 @@ function printCapabilityHelp(payload) {
     ? "caphub web search"
     : payload.capability === "scholar"
       ? "caphub academic search"
-    : payload.capability === "patents"
-      ? "caphub patent search"
-    : payload.capability === "search-ideas"
-      ? "caphub search ideas"
-      : payload.capability === "shopping"
-        ? "caphub product shopping"
+      : payload.capability === "patents"
+        ? "caphub patent search"
+        : payload.capability === "search-ideas"
+          ? "caphub search ideas"
+          : payload.capability === "cost"
+            ? "caphub cost"
+            : payload.capability === "jobs"
+              ? "caphub jobs"
+              : payload.capability === "shopping"
+                ? "caphub product shopping"
         : payload.capability === "places"
           ? "caphub places"
           : `caphub ${payload.capability}`;
+  const requestFormat = payload.capability === "jobs"
+    ? "caphub jobs <action> '<request>'"
+    : `caphub ${payload.capability} '<request>'`;
   const requestExample = payload.capability === "search"
     ? `caphub search '{"queries":["best AI agent frameworks 2026","autonomous coding agents"]}'`
     : payload.capability === "scholar"
       ? `caphub scholar '{"queries":["faster skin regeneration"]}'`
     : payload.capability === "patents"
-      ? `caphub patents '{"queries":["faster skin regeneration"]}'`
+      ? `caphub patents '{"queries":["faster skin regeneration"],"include_figures":false}'`
+    : payload.capability === "cost"
+      ? `caphub cost daily '{"days":30}'`
+    : payload.capability === "jobs"
+      ? `caphub jobs indeed '{"query":"United Nations programme officer","country":"us","location":"New York","sort_by":"relevance"}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"]}'`
       : payload.capability === "places"
@@ -1195,6 +1719,10 @@ function printCapabilityHelp(payload) {
       ? `caphub scholar '{"queries":["faster skin regeneration"],"country":"us","language":"en"}'`
     : payload.capability === "patents"
       ? null
+    : payload.capability === "cost"
+      ? `caphub cost log '{"limit":50}'`
+    : payload.capability === "jobs"
+      ? `caphub jobs linkedin '{"query":"growth marketing manager","location":"Singapore","workplace_types":["remote","hybrid"],"experience_levels":["associate","mid_senior"],"employment_types":["fulltime"]}'`
     : payload.capability === "shopping"
       ? `caphub shopping '{"queries":["apple m5 pro"],"country":"th","language":"en"}'`
       : payload.capability === "places"
@@ -1407,6 +1935,7 @@ function printCapabilityHelp(payload) {
   const patentsParameterOrder = [
     "queries",
     "queries[] as string",
+    "include_figures",
     "max_queries",
     "include_meta",
     "include_result_meta",
@@ -1431,12 +1960,33 @@ function printCapabilityHelp(payload) {
     "include_meta",
     "include_result_meta",
   ];
+  const costParameterOrder = [
+    "days",
+    "limit",
+  ];
+  const jobsParameterOrder = [
+    "query",
+    "country",
+    "location",
+    "sort_by",
+    "date_posted",
+    "workplace_types",
+    "experience_levels",
+    "employment_types",
+    "organization_ids",
+    "token",
+    "include_meta",
+  ];
   const preferredParameterOrder = payload.capability === "search"
     ? searchParameterOrder
     : payload.capability === "scholar"
       ? scholarParameterOrder
     : payload.capability === "patents"
       ? patentsParameterOrder
+    : payload.capability === "cost"
+      ? costParameterOrder
+    : payload.capability === "jobs"
+      ? jobsParameterOrder
     : payload.capability === "shopping"
       ? shoppingParameterOrder
       : payload.capability === "places"
@@ -1467,7 +2017,7 @@ function printCapabilityHelp(payload) {
     "",
     "request:",
     "format:",
-    `caphub ${payload.capability} '<request>'`,
+    requestFormat,
     "",
     "default request form:",
     requestExample,
@@ -1696,7 +2246,11 @@ async function redditUser(args) {
 
 async function commandReddit(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(REDDIT_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(REDDIT_HELP);
     return;
   }
@@ -1724,13 +2278,12 @@ async function commandReddit(args) {
 async function financeServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `finance ${action}`);
   const apiKey = getApiKey();
-  if (requiresAuth && !apiKey) {
-    fail(`Error: finance ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
-  }
-  const payload = await fetchJson(`${getApiUrl()}/v1/finance/${action}`, {
-    method: "POST",
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/finance/${action}`, {
     apiKey,
     body,
+    requiresAuth,
+    authLabel: `finance ${action}`,
+    queueLabel: `finance ${action}`,
   });
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -1738,13 +2291,38 @@ async function financeServerAction(action, args, { requiresAuth = true } = {}) {
 async function mapsServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `maps ${action}`);
   const apiKey = getApiKey();
-  if (requiresAuth && !apiKey) {
-    fail(`Error: maps ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
-  }
-  const payload = await fetchJson(`${getApiUrl()}/v1/maps/${action}`, {
-    method: "POST",
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/maps/${action}`, {
     apiKey,
     body,
+    requiresAuth,
+    authLabel: `maps ${action}`,
+    queueLabel: `maps ${action}`,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function xServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `x ${action}`);
+  const apiKey = getApiKey();
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/x/${action}`, {
+    apiKey,
+    body,
+    requiresAuth,
+    authLabel: `x ${action}`,
+    queueLabel: `x ${action}`,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function jobsServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `jobs ${action}`);
+  const apiKey = getApiKey();
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/jobs/${action}`, {
+    apiKey,
+    body,
+    requiresAuth,
+    authLabel: `jobs ${action}`,
+    queueLabel: `jobs ${action}`,
   });
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -1752,13 +2330,36 @@ async function mapsServerAction(action, args, { requiresAuth = true } = {}) {
 async function weatherServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `weather ${action}`);
   const apiKey = getApiKey();
-  if (requiresAuth && !apiKey) {
-    fail(`Error: weather ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
-  }
-  const payload = await fetchJson(`${getApiUrl()}/v1/weather/${action}`, {
-    method: "POST",
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/weather/${action}`, {
     apiKey,
     body,
+    requiresAuth,
+    authLabel: `weather ${action}`,
+    queueLabel: `weather ${action}`,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+async function costServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readOptionalJsonCommandInput(args, `cost ${action}`);
+  const apiKey = getApiKey();
+  if (requiresAuth && !apiKey) {
+    fail(`Error: cost ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
+  }
+
+  const url = new URL(`${getApiUrl()}/v1/cost/${action}`);
+  for (const [key, value] of Object.entries(body)) {
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) url.searchParams.append(key, String(item));
+      continue;
+    }
+    url.searchParams.set(key, String(value));
+  }
+
+  const payload = await fetchJson(url.toString(), {
+    method: "GET",
+    apiKey,
   });
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -1766,13 +2367,12 @@ async function weatherServerAction(action, args, { requiresAuth = true } = {}) {
 async function travelServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `travel ${action}`);
   const apiKey = getApiKey();
-  if (requiresAuth && !apiKey) {
-    fail(`Error: travel ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
-  }
-  const payload = await fetchJson(`${getApiUrl()}/v1/travel/${action}`, {
-    method: "POST",
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/travel/${action}`, {
     apiKey,
     body,
+    requiresAuth,
+    authLabel: `travel ${action}`,
+    queueLabel: `travel ${action}`,
   });
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -1780,13 +2380,12 @@ async function travelServerAction(action, args, { requiresAuth = true } = {}) {
 async function youtubeServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `youtube ${action}`);
   const apiKey = getApiKey();
-  if (requiresAuth && !apiKey) {
-    fail(`Error: youtube ${action} requires an api key because it runs server-side.\n\nnext:\n  - caphub auth login\n  - or set CAPHUB_API_KEY`);
-  }
-  const payload = await fetchJson(`${getApiUrl()}/v1/youtube/${action}`, {
-    method: "POST",
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/youtube/${action}`, {
     apiKey,
     body,
+    requiresAuth,
+    authLabel: `youtube ${action}`,
+    queueLabel: `youtube ${action}`,
   });
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -1834,7 +2433,11 @@ async function fetchPage(args) {
 
 async function commandFetch(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(FETCH_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(FETCH_HELP);
     return;
   }
@@ -1849,7 +2452,11 @@ async function commandFetch(args) {
 
 async function commandYouTube(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(YOUTUBE_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(YOUTUBE_HELP);
     return;
   }
@@ -1892,7 +2499,11 @@ async function commandYouTube(args) {
 
 async function commandFinance(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(FINANCE_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(FINANCE_HELP);
     return;
   }
@@ -1907,7 +2518,11 @@ async function commandFinance(args) {
 
 async function commandMaps(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(MAPS_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(MAPS_HELP);
     return;
   }
@@ -1930,7 +2545,11 @@ async function commandMaps(args) {
 
 async function commandWeather(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(WEATHER_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(WEATHER_HELP);
     return;
   }
@@ -1943,9 +2562,80 @@ async function commandWeather(args) {
   fail("Error: weather actions are: forecast.");
 }
 
+async function commandJobs(args) {
+  const sub = args[0];
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(JOBS_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
+    process.stdout.write(JOBS_HELP);
+    return;
+  }
+
+  if (sub === "indeed") {
+    await jobsServerAction("indeed", args.slice(1));
+    return;
+  }
+
+  if (sub === "linkedin") {
+    await jobsServerAction("linkedin", args.slice(1));
+    return;
+  }
+
+  fail("Error: jobs actions are: indeed, linkedin.");
+}
+
+async function commandX(args) {
+  const sub = args[0];
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(X_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
+    process.stdout.write(X_HELP);
+    return;
+  }
+
+  if (sub === "user") {
+    await xServerAction("user", args.slice(1));
+    return;
+  }
+  if (sub === "tweets") {
+    await xServerAction("tweets", args.slice(1));
+    return;
+  }
+  if (sub === "media") {
+    await xServerAction("media", args.slice(1));
+    return;
+  }
+  if (sub === "followers") {
+    await xServerAction("followers", args.slice(1));
+    return;
+  }
+  if (sub === "following") {
+    await xServerAction("following", args.slice(1));
+    return;
+  }
+  if (sub === "comments") {
+    await xServerAction("comments", args.slice(1));
+    return;
+  }
+  if (sub === "search") {
+    await xServerAction("search", args.slice(1));
+    return;
+  }
+
+  fail("Error: x actions are: user, tweets, media, followers, following, comments, search.");
+}
+
 async function commandTravel(args) {
   const sub = args[0];
-  if (!sub || sub === "--help" || sub === "-h" || sub === "help") {
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(TRAVEL_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
     process.stdout.write(TRAVEL_HELP);
     return;
   }
@@ -1955,7 +2645,36 @@ async function commandTravel(args) {
     return;
   }
 
-  fail("Error: travel actions are: flights.");
+  if (sub === "resolve") {
+    await travelServerAction("resolve", args.slice(1));
+    return;
+  }
+
+  fail("Error: travel actions are: resolve, flights.");
+}
+
+async function commandCost(args) {
+  const sub = args[0];
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(COST_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
+    process.stdout.write(COST_HELP);
+    return;
+  }
+
+  if (sub === "daily") {
+    await costServerAction("daily", args.slice(1));
+    return;
+  }
+
+  if (sub === "log") {
+    await costServerAction("log", args.slice(1));
+    return;
+  }
+
+  fail("Error: cost actions are: daily, log.");
 }
 
 async function commandHelp(args) {
@@ -1967,6 +2686,14 @@ async function commandHelp(args) {
   }
   if (capability === "reddit") {
     process.stdout.write(REDDIT_HELP);
+    return;
+  }
+  if (capability === "x") {
+    process.stdout.write(X_HELP);
+    return;
+  }
+  if (capability === "jobs") {
+    process.stdout.write(JOBS_HELP);
     return;
   }
   if (capability === "fetch") {
@@ -1991,6 +2718,10 @@ async function commandHelp(args) {
   }
   if (capability === "travel") {
     process.stdout.write(TRAVEL_HELP);
+    return;
+  }
+  if (capability === "cost") {
+    process.stdout.write(COST_HELP);
     return;
   }
 
@@ -2057,11 +2788,19 @@ async function commandAuth(args) {
       const started = await fetchJson(`${apiUrl}/v1/auth/cli/start`, { method: "POST", body: {} });
       process.stdout.write([
         "caphub auth login",
+        "-----------------",
         "",
-        "This will open Caphub in your browser to approve CLI login.",
-        `code: ${started.code}`,
-        `expires_in_seconds: ${started.expires_in_seconds}`,
-        `url: ${started.approval_url}`,
+        "Caphub is the simplest way to give your AI agent access to the real world.",
+        "Instead of making the agent open pages, click through flows, and burn tokens on browser steps, Caphub returns clean JSON in one call with fresh data.",
+        "",
+        "If you have not created an account yet, visit caphub.io to register for free and get 500 credits per month.",
+        "",
+        "To continue with CLI login:",
+        `  code: ${started.code}`,
+        `  expires_in_seconds: ${started.expires_in_seconds}`,
+        `  url: ${started.approval_url}`,
+        "  enter this code in the dashboard before approving login",
+        "  Press Enter to open the browser login page, or Ctrl+C to cancel.",
         "",
       ].join("\n"));
 
@@ -2161,10 +2900,12 @@ async function commandCapability(capability, args) {
 
   if (!("function" in body)) body.function = capability;
 
-  const payload = await fetchJson(`${getApiUrl()}/v1/${capability}`, {
-    method: "POST",
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/${capability}`, {
     apiKey,
     body,
+    requiresAuth: true,
+    authLabel: `capability "${capability}"`,
+    queueLabel: capability,
   });
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -2198,6 +2939,16 @@ async function main() {
     return;
   }
 
+  if (cmd === "x") {
+    await commandX(args.slice(1));
+    return;
+  }
+
+  if (cmd === "jobs") {
+    await commandJobs(args.slice(1));
+    return;
+  }
+
   if (cmd === "fetch") {
     await commandFetch(args.slice(1));
     return;
@@ -2215,6 +2966,11 @@ async function main() {
 
   if (cmd === "maps") {
     await commandMaps(args.slice(1));
+    return;
+  }
+
+  if (cmd === "cost") {
+    await commandCost(args.slice(1));
     return;
   }
 
