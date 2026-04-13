@@ -395,7 +395,7 @@ const X_HELP = `caphub x
 
 Server-side X capability.
 
-Use X when you need compact profile data, tweets, media, follower or following lists, comments on a post, or search results from X/Twitter without dragging the provider's full GraphQL payload into context.
+Use X when you need compact profile data, tweets, media, follower or following lists, comments on a post, or search results from X/Twitter without dragging large raw payloads into context.
 
 queue behavior:
   when X is busy, the CLI auto-waits and polls for a slot instead of forcing manual retry loops
