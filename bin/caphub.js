@@ -32,7 +32,7 @@ const LOCAL_FETCH_HEADERS = {
 
 const ROOT_HELP = `caphub
 
-Caphub helps agents research products, compare offers, find the best places, learn a topic, get the latest financial news, and more without dragging full websites into context.
+Use CapHub to research products, compare offers, find the best places, learn a topic, get the latest news, and more without dragging full websites into context.
 
 purpose: root CLI for Caphub agent capabilities
 auth: CAPHUB_API_KEY env or ${CONFIG_PATH}
@@ -56,12 +56,14 @@ commands:
   x tweets <json>       fetch compact X tweets server-side; costs credits
   youtube search <json> search YouTube videos server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
-  finance news <json>   fetch recent stock ticker news server-side; costs credits
+  news world <json>     fetch recent world news for one country server-side; costs credits
+  news finance <json>   fetch recent stock ticker news server-side; costs credits
   maps search <json>    search Google Maps in a named area server-side; costs credits
   cost daily <json>     fetch daily CapHub cost breakdown server-side; 0 credits
   cost log <json>       fetch recent CapHub usage log server-side; 0 credits
-  travel resolve <json> resolve airport/city inputs server-side; costs credits
   travel flights <json> search flights server-side; costs credits
+  travel hotels <json>  search hotels by destination server-side; costs credits
+  travel hotel <json>   fetch one hotel's room prices server-side; costs credits
   jobs indeed <json>    search Indeed jobs server-side; costs credits
   jobs linkedin <json>  search LinkedIn jobs server-side; costs credits
   weather forecast <json> fetch daily weather forecast by place name server-side; costs credits
@@ -70,7 +72,7 @@ recommended flow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|x|jobs|youtube|finance|maps|cost|travel|weather <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|x|jobs|youtube|finance|news|maps|cost|travel|weather <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -102,15 +104,17 @@ examples:
   caphub x tweets '{"username":"MrBeast","count":10}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
-  caphub finance news '{"queries":["NVDA","AAPL"]}'
+  caphub news world '{"country":"Hungary","language":"local"}'
+  caphub news finance '{"queries":["NVDA","AAPL"]}'
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
   caphub maps places '{"queries":["best pizza in Vienna"]}'
   caphub maps reviews '{"cids":["13290506179446267841"],"sort_by":"newest"}'
   caphub cost daily '{"days":30}'
   caphub cost log '{"limit":50}'
-  caphub travel resolve '{"query":"Heathrow","country":"GB"}'
   caphub travel flights '{"tripType":"round-trip","origin":"LHR","destination":"JFK","departDate":"2026-06-01","returnDate":"2026-06-08","cabinClass":"business","adults":1}'
   caphub travel flights '{"tripType":"one-way","origin":"LHR","destination":"JFK","departDate":"2026-06-01","cabinClass":"business","adults":1}'
+  caphub travel hotels '{"destination":"Lindos, Rhodes","checkin_date":"2026-07-01","checkout_date":"2026-07-10","adults":2,"currency":"EUR","budget_per_night":100,"filters":["free_cancellation"]}'
+  caphub travel hotel '{"hotel_name":"InterContinental Dubai Marina by IHG","location":"Dubai Marina","checkin_date":"2026-05-01","checkout_date":"2026-05-10","adults":2,"currency":"EUR"}'
   caphub jobs indeed '{"query":"United Nations programme officer","country":"us","location":"New York","sort_by":"relevance"}'
   caphub jobs indeed '{"query":"sports software engineer","country":"us","location":"Remote","sort_by":"date"}'
   caphub jobs linkedin '{"query":"English teacher","location":"Bangkok","date_posted":"month"}'
@@ -137,6 +141,185 @@ examples:
   caphub fetch page '{"url":"https://example.com","include_html":true,"max_chars":8000}'
 `;
 
+const SEARCH_HELP = `caphub search
+
+Server-side web search capability.
+
+Use search when you need compact cited web research fast.
+
+commands:
+  search <json>  Search the web server-side; requires auth; 1 credit per query, up to 5 queries in parallel
+
+routing:
+  compact cited web research                 caphub search
+  widen the query plan first                 caphub search-ideas
+  known public page URL                      caphub fetch page
+
+response fields:
+  queries[].query
+  queries[].country
+  queries[].language
+  queries[].from_time
+  results[].query
+  results[].items[].title
+  results[].items[].link
+  results[].items[].source_domain
+  results[].items[].snippet
+  results[].items[].date
+  total_usage.total_credits_used
+  total_usage.credits_remaining
+  billing.credits_used
+  took_ms
+
+examples:
+  caphub search '{"queries":["best AI agent frameworks 2026"]}'
+  caphub search '{"queries":["best AI agent frameworks 2026","autonomous coding agents"],"country":"us","language":"en"}'
+  caphub search '{"queries":["EV discounts Thailand"],"country":"th","language":"en","from_time":"week"}'
+`;
+
+const SCHOLAR_HELP = `caphub scholar
+
+Server-side academic search capability.
+
+Use scholar when you need papers, citations, and academic sources.
+
+commands:
+  scholar <json>  Search academic sources server-side; requires auth; 1 credit per query, up to 5 queries in parallel
+
+routing:
+  academic papers and citations               caphub scholar
+  patent prior art or assignees               caphub patents
+  general web research                        caphub search
+
+response fields:
+  queries[].query
+  queries[].country
+  queries[].language
+  results[].query
+  results[].items[].title
+  results[].items[].link
+  results[].items[].publication_info
+  results[].items[].snippet
+  results[].items[].year
+  results[].items[].cited_by
+  results[].items[].pdf_url
+  results[].items[].id
+  total_usage.total_credits_used
+  total_usage.credits_remaining
+  billing.credits_used
+  took_ms
+
+examples:
+  caphub scholar '{"queries":["world models for robotics 2025"]}'
+  caphub scholar '{"queries":["world models for robotics 2025","world models for robotics 2026"],"country":"us","language":"en"}'
+`;
+
+const PATENTS_HELP = `caphub patents
+
+Server-side patent search capability.
+
+Use patents when you need prior art, inventors, assignees, filing dates, or publication numbers.
+
+commands:
+  patents <json>  Search patents server-side; requires auth; 1 credit per query, or 3 credits with include_figures, up to 5 queries in parallel
+
+routing:
+  patent prior art and filing metadata        caphub patents
+  academic papers and citations               caphub scholar
+  general web research                        caphub search
+
+response fields:
+  queries[].query
+  results[].query
+  results[].items[].title
+  results[].items[].link
+  results[].items[].snippet
+  results[].items[].priority_date
+  results[].items[].filing_date
+  results[].items[].grant_date
+  results[].items[].publication_date
+  results[].items[].inventor
+  results[].items[].assignee
+  results[].items[].publication_number
+  results[].items[].language
+  results[].items[].pdf_url
+  results[].items[].figures
+  total_usage.total_credits_used
+  total_usage.credits_remaining
+  billing.credits_used
+  took_ms
+
+examples:
+  caphub patents '{"queries":["faster skin regeneration"]}'
+  caphub patents '{"queries":["faster skin regeneration"],"include_figures":true}'
+`;
+
+const SEARCH_IDEAS_HELP = `caphub search-ideas
+
+Server-side query planning capability.
+
+Use search-ideas when you want to widen the query plan before spending credits on full search.
+
+commands:
+  search-ideas <json>  Generate search suggestions server-side; requires auth; 1 credit per query, up to 5 queries in parallel
+
+routing:
+  widen the query plan first                  caphub search-ideas
+  run full cited web research                 caphub search
+  academic sources                            caphub scholar
+
+response fields:
+  queries[].query
+  queries[].country
+  queries[].language
+  ideas[].query
+  ideas[].suggestions[]
+  total_usage.total_credits_used
+  total_usage.credits_remaining
+  billing.credits_used
+  took_ms
+
+examples:
+  caphub search-ideas '{"queries":["best robot vacuum"]}'
+  caphub search-ideas '{"queries":["best robot vacuum","EV discounts Thailand"],"country":"th","language":"en"}'
+`;
+
+const SHOPPING_HELP = `caphub shopping
+
+Server-side shopping capability.
+
+Use shopping when you need product comparison across retailers, prices, and ratings.
+
+commands:
+  shopping <json>  Search products server-side; requires auth; 2 credits per query, up to 5 queries in parallel
+
+routing:
+  products, prices, and retailers             caphub shopping
+  general cited web research                  caphub search
+  local places and reviews                    caphub maps
+
+response fields:
+  queries[].query
+  queries[].country
+  queries[].language
+  results[].query
+  results[].items[].title
+  results[].items[].source
+  results[].items[].link
+  results[].items[].price
+  results[].items[].rating
+  results[].items[].rating_count
+  results[].items[].product_id
+  total_usage.total_credits_used
+  total_usage.credits_remaining
+  billing.credits_used
+  took_ms
+
+examples:
+  caphub shopping '{"queries":["apple m5 pro"]}'
+  caphub shopping '{"queries":["apple m5 pro","wireless headphones"],"country":"us","language":"en"}'
+`;
+
 const REDDIT_HELP = `caphub reddit
 
 Hybrid Reddit capability.
@@ -154,6 +337,51 @@ routing:
   known Reddit post ID or URL              caphub reddit post
   known Reddit username                    caphub reddit user
   topic discovery across Reddit            caphub reddit search
+
+response fields:
+  search:
+    query
+    subreddit
+    time
+    results[].title
+    results[].url
+    results[].post_id
+    results[].subreddit
+    results[].snippet
+    results[].date
+    billing.credits_used
+    result_count
+    took_ms
+
+  feed:
+    subreddit
+    sort
+    time
+    posts[].id
+    posts[].title
+    posts[].url
+    posts[].subreddit
+    posts[].author
+    posts[].score
+    posts[].num_comments
+    posts[].created_utc
+
+  post:
+    id
+    title
+    url
+    subreddit
+    author
+    score
+    num_comments
+    created_utc
+    selftext
+    comments[]
+
+  user:
+    username
+    type
+    items[]
 
 examples:
   caphub reddit search '{"query":"qwen3 8b","subreddit":"LocalLLaMA","time":"month","limit":10}'
@@ -190,6 +418,73 @@ routing:
   known post id reply thread                  caphub x comments
   broad topic discovery on X                  caphub x search
 
+response fields:
+  user:
+    users[].id
+    users[].username
+    users[].name
+    users[].bio
+    users[].location
+    users[].created_at
+    users[].verified
+    users[].blue_verified
+    users[].followers_count
+    users[].following_count
+    users[].tweet_count
+    user_count
+    billing.credits_used
+    took_ms
+
+  tweets:
+    tweets[].id
+    tweets[].created_at
+    tweets[].text
+    tweets[].author.id
+    tweets[].author.username
+    tweets[].author.name
+    tweets[].metrics.likes
+    tweets[].metrics.replies
+    tweets[].metrics.retweets
+    tweets[].metrics.quotes
+    tweets[].metrics.views
+    tweet_count
+    billing.credits_used
+    took_ms
+
+  media:
+    tweets[]
+    tweet_count
+    billing.credits_used
+    took_ms
+
+  followers:
+    users[]
+    user_count
+    billing.credits_used
+    took_ms
+
+  following:
+    users[]
+    user_count
+    billing.credits_used
+    took_ms
+
+  comments:
+    comments[]
+    comment_count
+    billing.credits_used
+    took_ms
+
+  search:
+    query
+    type
+    users[]
+    user_count
+    tweets[]
+    tweet_count
+    billing.credits_used
+    took_ms
+
 examples:
   caphub x user '{"username":"elonmusk"}'
   caphub x user '{"ids":["2455740283","44196397"]}'
@@ -219,6 +514,44 @@ routing:
 notes:
   Indeed descriptions are trimmed to 5000 characters.
   Some normalized filters are LinkedIn-only. With include_meta true, ignored_filters shows what was not applied.
+
+response fields:
+  indeed:
+    search.query
+    search.country
+    search.location
+    search.sort_by
+    jobs[].id
+    jobs[].title
+    jobs[].company_name
+    jobs[].location
+    jobs[].posted_at
+    jobs[].job_url
+    jobs[].description
+    jobs[].source
+    job_count
+    next_token
+    billing.credits_used
+    took_ms
+
+  linkedin:
+    search.query
+    search.location
+    search.date_posted
+    jobs[].id
+    jobs[].title
+    jobs[].company_name
+    jobs[].location
+    jobs[].posted_at
+    jobs[].posted_time_ago
+    jobs[].employment_type
+    jobs[].job_url
+    jobs[].company_profile_url
+    jobs[].source
+    job_count
+    next_token
+    billing.credits_used
+    took_ms
 
 examples:
   caphub jobs indeed '{"query":"United Nations programme officer","country":"us","location":"New York","sort_by":"relevance"}'
@@ -253,6 +586,69 @@ routing:
   latest videos from a known channel            caphub youtube channel-latest
   enumerate videos from a playlist              caphub youtube playlist-videos
 
+response fields:
+  transcript:
+    video_id
+    title
+    author
+    transcript
+
+  transcript-server:
+    video_id
+    language
+    transcript
+    billing.credits_used
+    took_ms
+
+  search:
+    queries[].query
+    results[].query
+    results[].results[].title
+    results[].results[].url
+    results[].results[].video_id
+    results[].results[].snippet
+    results[].results[].channel
+    results[].results[].duration
+    results[].results[].date
+    result_count
+    billing.credits_used
+    took_ms
+
+  channel-resolve:
+    input
+    channel.id
+    channel.title
+    channel.handle
+    billing.credits_used
+    took_ms
+
+  channel-search:
+    results[]
+    result_count
+    billing.credits_used
+    took_ms
+
+  channel-videos:
+    results[]
+    continuation_token
+    has_more
+    billing.credits_used
+    took_ms
+
+  channel-latest:
+    results[]
+    result_count
+    billing.credits_used
+    took_ms
+
+  playlist-videos:
+    results[]
+    playlist_info
+    continuation_token
+    has_more
+    billing.credits_used
+    took_ms
+
 examples:
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub youtube transcript '{"video_url":"https://youtu.be/GmE4JwmFuHk","language":"en","send_metadata":true}'
@@ -278,9 +674,74 @@ routing:
   recent headlines for a known stock ticker      caphub finance news
   non-ticker company research                    use caphub search instead
 
+response fields:
+  queries[].query
+  results[].query
+  results[].items[].title
+  results[].items[].link
+  results[].items[].source_domain
+  results[].items[].snippet
+  results[].items[].date
+  results[].items[].source
+  result_count
+  billing.credits_used
+  total_usage.total_credits_used
+  total_usage.credits_remaining
+  took_ms
+
 examples:
   caphub finance news '{"queries":["NVDA","AAPL"]}'
   caphub finance news '{"queries":["BRK.B"],"limit":20}'
+`;
+
+const NEWS_HELP = `caphub news
+
+Server-side news capability.
+
+Use news world when you need the latest country-level headlines.
+Use news finance when you need the latest coverage for stock tickers such as NVDA, AAPL, or BRK.B.
+
+commands:
+  news world <json>    Fetch recent world news for one country server-side; requires auth; 1 credit
+  news finance <json>  Fetch recent ticker news server-side; requires auth; 1 credit per ticker, up to 5 tickers in parallel
+
+routing:
+  local-language or english country news         caphub news world
+  recent headlines for a known stock ticker      caphub news finance
+
+response fields:
+  world:
+    country
+    country_code
+    language
+    query
+    items[].title
+    items[].link
+    items[].source_domain
+    items[].snippet
+    items[].date
+    items[].source
+    result_count
+    billing.credits_used
+    took_ms
+
+  finance:
+    queries[].query
+    results[].query
+    results[].items[].title
+    results[].items[].link
+    results[].items[].source_domain
+    results[].items[].snippet
+    results[].items[].date
+    results[].items[].source
+    result_count
+    billing.credits_used
+    took_ms
+
+examples:
+  caphub news world '{"country":"Hungary","language":"local"}'
+  caphub news world '{"country":"Hungary","language":"english"}'
+  caphub news finance '{"queries":["NVDA","AAPL"]}'
 `;
 
 const MAPS_HELP = `caphub maps
@@ -298,6 +759,43 @@ routing:
   category or business type in a named area       caphub maps search
   exact place text search with location phrase    caphub maps places
   reviews for known place CID                     caphub maps reviews
+
+response fields:
+  search:
+    query
+    area
+    resolved_area.name
+    resolved_area.country
+    resolved_area.latitude
+    resolved_area.longitude
+    places[].title
+    places[].address
+    places[].google_maps_url
+    places[].rating
+    places[].rating_count
+    places[].type
+    places[].website
+    places[].phone_number
+    places[].cid
+    place_count
+    billing.credits_used
+    took_ms
+
+  places:
+    queries[].query
+    results[].query
+    results[].items[]
+    result_count
+    billing.credits_used
+    took_ms
+
+  reviews:
+    cids[]
+    sort_by
+    reviews[]
+    review_count
+    billing.credits_used
+    took_ms
 
 examples:
   caphub maps search '{"query":"pizza","area":"Chiang Mai","zoom":11}'
@@ -349,281 +847,103 @@ const TRAVEL_HELP = `caphub travel
 
 Server-side travel capability.
 
-Use travel flights when you need one-way or round-trip flight offers compared for a route and dates during research or planning, then hand off to a browser only for final checkout if needed.
+Use travel airport-resolve when you need candidate airports for a flight search.
+Use travel flights when you need one-way or round-trip flight offers compared for a route and dates.
+Use travel hotels when you need a destination-level hotel shortlist with price signals.
+Use travel hotel when you need room availability and pricing for one specific hotel.
 
 commands:
-  travel resolve <json>  Resolve airport code, airport name, or city/municipality to candidate airports; requires auth; 1 credit
+  travel airport-resolve <json>  Resolve airport code, airport name, or city/municipality to candidate airports; requires auth; 1 credit
   travel flights <json>  Search flights server-side; requires auth; 5 credits
+  travel hotels <json>   Search hotels in a destination server-side; requires auth; 2 credits
+  travel hotel <json>    Fetch one hotel's room pricing server-side; requires auth; 2 credits
 
 routing:
-  city name, airport name, or unknown airport code     caphub travel resolve
+  city name, airport name, or unknown airport code     caphub travel airport-resolve
   compare flight options for a route and dates      caphub travel flights
-  research travel before booking                    caphub travel flights
+  compare hotel options in a destination            caphub travel hotels
+  inspect one specific hotel                        caphub travel hotel
   final checkout or booking                         use the browser after research
 
+response fields:
+  airport-resolve:
+    query
+    matches[].type
+    matches[].code
+    matches[].name
+    matches[].municipality
+    matches[].country
+    matches[].airport_type
+    matches[].match_score
+    matches[].match_reason
+    match_count
+    billing.credits_used
+    took_ms
+
+  flights:
+    search.origin
+    search.destination
+    search.departDate
+    search.returnDate
+    search.tripType
+    search.cabinClass
+    currency
+    offers[]
+    price_insights.low
+    price_insights.high
+    price_insights.relative_level
+    offer_count
+    billing.credits_used
+    took_ms
+
+  hotels:
+    destination
+    checkin_date
+    checkout_date
+    applied_filters
+    budget_per_night
+    properties[].hotel_booking_id
+    properties[].name
+    properties[].price
+    properties[].price_string
+    properties[].review_score
+    properties[].review_count
+    properties[].room_type
+    properties[].location
+    properties[].booking_url
+    property_count
+    billing.credits_used
+    took_ms
+
+  hotel:
+    hotel_booking_id
+    hotel_name
+    matched_name
+    checkin_date
+    checkout_date
+    booking_url
+    rooms[].room_type
+    rooms[].room_economy
+    rooms[].guests
+    rooms[].price_as_number
+    rooms[].price
+    room_count
+    billing.credits_used
+    took_ms
+
 examples:
-  caphub travel resolve '{"query":"Heathrow","country":"GB"}'
-  caphub travel resolve '{"query":"JFK","country":"US"}'
+  caphub travel airport-resolve '{"query":"Heathrow","country":"GB"}'
+  caphub travel airport-resolve '{"query":"JFK","country":"US"}'
   caphub travel flights '{"tripType":"round-trip","origin":"LHR","destination":"JFK","departDate":"2026-06-01","returnDate":"2026-06-08","cabinClass":"business","adults":1}'
   caphub travel flights '{"tripType":"one-way","origin":"LHR","destination":"JFK","departDate":"2026-06-01","cabinClass":"business","adults":1}'
+  caphub travel hotels '{"destination":"Lindos, Rhodes","checkin_date":"2026-07-01","checkout_date":"2026-07-10","adults":2,"currency":"EUR","budget_per_night":100,"filters":["free_cancellation"]}'
+  caphub travel hotel '{"hotel_name":"InterContinental Dubai Marina by IHG","location":"Dubai Marina","checkin_date":"2026-05-01","checkout_date":"2026-05-10","adults":2,"currency":"EUR"}'
+  caphub travel hotel '{"hotel_booking_id":"it/boffenigoboutiquegarda","checkin_date":"2026-05-01","checkout_date":"2026-05-10","adults":2,"currency":"EUR"}'
 `;
 
-const CAPABILITY_GROUPS = [
-  {
-    title: "Web",
-    actions: [
-      {
-        command: "search",
-        execution: "server",
-        cost: "1 credit/query",
-        summary: "Use when you need compact cited web research fast.",
-      },
-      {
-        command: "search-ideas",
-        execution: "server",
-        cost: "1 credit/query",
-        summary: "Use before full search to widen query planning.",
-      },
-      {
-        command: "fetch page",
-        execution: "local",
-        cost: "free",
-        summary: "Use when you already have a public URL and search is done.",
-      },
-    ],
-  },
-  {
-    title: "Research",
-    actions: [
-      {
-        command: "scholar",
-        execution: "server",
-        cost: "1 credit/query",
-        summary: "Use when you need papers, citations, or academic sources.",
-      },
-      {
-        command: "patents",
-        execution: "server",
-        cost: "1 to 3 credits/query",
-        summary: "Use when you need prior art, assignees, or filing details.",
-      },
-      {
-        command: "shopping",
-        execution: "server",
-        cost: "2 credits/query",
-        summary: "Use when you need products, retailers, prices, and ratings compared.",
-      },
-    ],
-  },
-  {
-    title: "Social",
-    actions: [
-      {
-        command: "x user",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need a compact X profile by username or id.",
-      },
-      {
-        command: "x tweets",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need recent tweets from a known X account.",
-      },
-      {
-        command: "x media",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need only media tweets from a known X account.",
-      },
-      {
-        command: "x comments",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need replies on a known X post.",
-      },
-      {
-        command: "x search",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need compact X people and posts by query.",
-      },
-      {
-        command: "reddit search",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need relevant Reddit discussions by topic.",
-      },
-      {
-        command: "reddit feed",
-        execution: "local",
-        cost: "free",
-        summary: "Use when the subreddit is already known.",
-      },
-      {
-        command: "reddit post",
-        execution: "local",
-        cost: "free",
-        summary: "Use when the Reddit post URL or ID is already known.",
-      },
-      {
-        command: "reddit user",
-        execution: "local",
-        cost: "free",
-        summary: "Use when the Reddit username is already known.",
-      },
-    ],
-  },
-  {
-    title: "Jobs",
-    actions: [
-      {
-        command: "jobs indeed",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need description-rich job search in one call.",
-      },
-      {
-        command: "jobs linkedin",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need richer LinkedIn job filters.",
-      },
-    ],
-  },
-  {
-    title: "Video",
-    actions: [
-      {
-        command: "youtube search",
-        execution: "server",
-        cost: "1 credit/query",
-        summary: "Use when you need relevant YouTube videos by topic.",
-      },
-      {
-        command: "youtube transcript",
-        execution: "local",
-        cost: "free",
-        summary: "Use when you already have a video and this machine can reach YouTube.",
-      },
-      {
-        command: "youtube transcript-server",
-        execution: "server",
-        cost: "2 credits",
-        summary: "Use when transcript fetch must run on hosted infrastructure.",
-      },
-      {
-        command: "youtube channel-resolve",
-        execution: "server",
-        cost: "free",
-        summary: "Use when you need a handle or URL turned into a channel ID.",
-      },
-      {
-        command: "youtube channel-search",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need search within one creator or channel.",
-      },
-      {
-        command: "youtube channel-videos",
-        execution: "server",
-        cost: "1 credit/page",
-        summary: "Use when you need uploads from a known channel enumerated.",
-      },
-      {
-        command: "youtube channel-latest",
-        execution: "server",
-        cost: "free",
-        summary: "Use when you need the latest videos from a known channel.",
-      },
-      {
-        command: "youtube playlist-videos",
-        execution: "server",
-        cost: "1 credit/page",
-        summary: "Use when you need videos from a playlist enumerated.",
-      },
-    ],
-  },
-  {
-    title: "Finance",
-    actions: [
-      {
-        command: "finance news",
-        execution: "server",
-        cost: "1 credit/query",
-        summary: "Use when you need the latest news on known stock tickers.",
-      },
-    ],
-  },
-  {
-    title: "Maps",
-    actions: [
-      {
-        command: "maps search",
-        execution: "server",
-        cost: "3 credits",
-        summary: "Use when you need a category of place in a named area.",
-      },
-      {
-        command: "maps places",
-        execution: "server",
-        cost: "1 credit/query",
-        summary: "Use when the place query already includes the location.",
-      },
-      {
-        command: "maps reviews",
-        execution: "server",
-        cost: "1 credit/CID",
-        summary: "Use after selecting a place and needing reviews.",
-      },
-    ],
-  },
-  {
-    title: "Travel",
-    actions: [
-      {
-        command: "travel resolve",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need city or airport text resolved before flight search.",
-      },
-      {
-        command: "travel flights",
-        execution: "server",
-        cost: "5 credits",
-        summary: "Use when you need flight offers compared before final booking.",
-      },
-    ],
-  },
-  {
-    title: "Management",
-    actions: [
-      {
-        command: "cost daily",
-        execution: "server",
-        cost: "0 credits",
-        summary: "Use when you need daily CapHub spend by category.",
-      },
-      {
-        command: "cost log",
-        execution: "server",
-        cost: "0 credits",
-        summary: "Use when you need the recent billed usage log with timestamps and response times.",
-      },
-    ],
-  },
-  {
-    title: "Weather",
-    actions: [
-      {
-        command: "weather forecast",
-        execution: "server",
-        cost: "1 credit",
-        summary: "Use when you need rain and temperature by place name.",
-      },
-    ],
-  },
-];
+function formatCategoryLabel(category) {
+  return String(category || "other").replace(/(^|-)([a-z])/g, (_, sep, c) => `${sep ? " " : ""}${c.toUpperCase()}`);
+}
 
 class ApiError extends Error {
   constructor(message, status = 0, data = null) {
@@ -1572,7 +1892,7 @@ async function waitForEnterToOpen(url) {
     output: process.stdout,
   });
   try {
-    await rl.question("Press Enter to open the browser login page, or Ctrl+C to cancel.");
+    await rl.question("Press Enter to open the browser login page, then enter the code shown above. Ctrl+C to cancel.");
   } finally {
     rl.close();
   }
@@ -1642,38 +1962,105 @@ function sleep(ms) {
   return new Promise((resolveWait) => setTimeout(resolveWait, ms));
 }
 
+function formatExpiryClock(ttlSeconds) {
+  const expiresAt = new Date(Date.now() + Math.max(0, Number(ttlSeconds || 0)) * 1000);
+  return expiresAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function writeAuthSuccess(apiUrl) {
+  process.stdout.write([
+    "",
+    "caphub is logged in and ready!",
+    "",
+    "agent:",
+    JSON.stringify({ ok: true, config_path: CONFIG_PATH, api_url: apiUrl }, null, 2),
+    "",
+  ].join("\n"));
+}
+
+function shortCredits(raw) {
+  if (!raw) return "—";
+  const s = String(raw);
+  // Extract the first "N credit(s)" mention for the table view
+  const m = s.match(/(\d+)\s+credits?\b/);
+  if (m) return `${m[1]} cr`;
+  if (/\b0\s+credits?\b/.test(s) || s.includes("0 credits")) return "0 cr";
+  return s.length > 12 ? s.slice(0, 11) + "…" : s;
+}
+
 function printCapabilities(payload) {
+  const raw = Array.isArray(payload.capabilities) ? payload.capabilities : [];
+  const all = [];
+
+  for (const item of raw) {
+    if (!item || item.hidden_in_capabilities === true) continue;
+    const actions = item.actions && typeof item.actions === "object" ? Object.entries(item.actions) : [];
+    if (item.show_actions_in_capabilities === true && actions.length > 0) {
+      for (const [actionName, action] of actions) {
+        all.push({
+          category: item.category,
+          command: `${item.capability} ${String(actionName).replace(/_/g, "-")}`,
+          execution: action?.execution || item.execution,
+          credits: action?.credits || item.credits,
+          description: action?.description || item.description || item.purpose || "",
+        });
+      }
+      continue;
+    }
+    all.push({
+      category: item.category,
+      command: item.capability,
+      execution: item.execution,
+      credits: item.credits,
+      description: item.description || item.purpose || "",
+    });
+  }
+
+  const grouped = new Map();
+  const categoryOrder = [];
+  for (const item of all) {
+    const category = item.category || "other";
+    if (!categoryOrder.includes(category)) categoryOrder.push(category);
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push(item);
+  }
+
+  // Compute column widths across all items
+  const nameW = Math.max(10, ...all.map((c) => String(c.command || "").length));
+  const modeW = Math.max(4, ...all.map((c) => String(c.execution || "—").length));
+  const costW = Math.max(4, ...all.map((c) => shortCredits(c.credits).length));
+
+  const header = `  ${"command".padEnd(nameW)}  ${"mode".padEnd(modeW)}  ${"cost".padEnd(costW)}  description`;
+  const divider = `  ${"─".repeat(nameW)}  ${"─".repeat(modeW)}  ${"─".repeat(costW)}  ${"─".repeat(40)}`;
+
   const lines = [
     "caphub capabilities",
     "",
     "Agent-facing commands available through this CLI.",
-    "Each action shows mode, cost, and when to use it.",
-    "Use 'caphub help <capability>' before first use.",
+    "Run 'caphub help <capability>' for full parameters and examples.",
+    "",
+    header,
+    divider,
   ];
 
-  const liveCapabilities = new Set((payload.capabilities || []).map((item) => item.capability));
-
-  for (const group of CAPABILITY_GROUPS) {
-    const actions = group.actions.filter((action) => {
-      const root = action.command.split(" ")[0];
-      if (action.execution === "local") return true;
-      return liveCapabilities.has(root);
-    });
-    if (!actions.length) continue;
+  for (const category of categoryOrder) {
+    const capabilities = grouped.get(category) || [];
+    if (!capabilities.length) continue;
 
     lines.push("");
-    lines.push(group.title);
-    lines.push("");
-    const commandWidth = Math.max(...actions.map((action) => action.command.length));
-    const executionWidth = Math.max(...actions.map((action) => action.execution.length));
-    for (const action of actions) {
-      const command = action.command.padEnd(commandWidth);
-      const execution = action.execution.padEnd(executionWidth);
-      lines.push(`  ${command}   ${execution}   ${action.cost}`);
-      lines.push(`    ${action.summary}`);
-      lines.push("");
+    lines.push(`  ${formatCategoryLabel(category)}`);
+
+    for (const item of capabilities) {
+      const name = String(item.command || "").padEnd(nameW);
+      const mode = String(item.execution || "—").padEnd(modeW);
+      const cost = shortCredits(item.credits).padEnd(costW);
+      const desc = item.description || item.purpose || "";
+      lines.push(`  ${name}  ${mode}  ${cost}  ${desc}`);
     }
   }
+
+  lines.push("");
+  lines.push(`${all.length} commands available. Use 'caphub help <name>' for details.`);
   process.stdout.write(`${lines.join("\n").trimEnd()}\n`);
 }
 
@@ -2288,6 +2675,19 @@ async function financeServerAction(action, args, { requiresAuth = true } = {}) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function newsServerAction(action, args, { requiresAuth = true } = {}) {
+  const body = await readJsonCommandInput(args, `news ${action}`);
+  const apiKey = getApiKey();
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/news/${action}`, {
+    apiKey,
+    body,
+    requiresAuth,
+    authLabel: `news ${action}`,
+    queueLabel: `news ${action}`,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function mapsServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `maps ${action}`);
   const apiKey = getApiKey();
@@ -2516,6 +2916,29 @@ async function commandFinance(args) {
   fail("Error: finance actions are: news.");
 }
 
+async function commandNews(args) {
+  const sub = args[0];
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(NEWS_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
+    process.stdout.write(NEWS_HELP);
+    return;
+  }
+
+  if (sub === "world") {
+    await newsServerAction("world", args.slice(1));
+    return;
+  }
+  if (sub === "finance") {
+    await newsServerAction("finance", args.slice(1));
+    return;
+  }
+
+  fail("Error: news actions are: world, finance.");
+}
+
 async function commandMaps(args) {
   const sub = args[0];
   if (!sub || isHelpArg(sub)) {
@@ -2645,12 +3068,27 @@ async function commandTravel(args) {
     return;
   }
 
+  if (sub === "hotels") {
+    await travelServerAction("hotels", args.slice(1));
+    return;
+  }
+
+  if (sub === "hotel") {
+    await travelServerAction("hotel", args.slice(1));
+    return;
+  }
+
+  if (sub === "airport-resolve") {
+    await travelServerAction("resolve", args.slice(1));
+    return;
+  }
+
   if (sub === "resolve") {
     await travelServerAction("resolve", args.slice(1));
     return;
   }
 
-  fail("Error: travel actions are: resolve, flights.");
+  fail("Error: travel actions are: airport-resolve, flights, hotels, hotel.");
 }
 
 async function commandCost(args) {
@@ -2688,6 +3126,26 @@ async function commandHelp(args) {
     process.stdout.write(REDDIT_HELP);
     return;
   }
+  if (capability === "search") {
+    process.stdout.write(SEARCH_HELP);
+    return;
+  }
+  if (capability === "scholar") {
+    process.stdout.write(SCHOLAR_HELP);
+    return;
+  }
+  if (capability === "patents") {
+    process.stdout.write(PATENTS_HELP);
+    return;
+  }
+  if (capability === "search-ideas") {
+    process.stdout.write(SEARCH_IDEAS_HELP);
+    return;
+  }
+  if (capability === "shopping") {
+    process.stdout.write(SHOPPING_HELP);
+    return;
+  }
   if (capability === "x") {
     process.stdout.write(X_HELP);
     return;
@@ -2706,6 +3164,10 @@ async function commandHelp(args) {
   }
   if (capability === "finance") {
     process.stdout.write(FINANCE_HELP);
+    return;
+  }
+  if (capability === "news") {
+    process.stdout.write(NEWS_HELP);
     return;
   }
   if (capability === "maps") {
@@ -2797,22 +3259,24 @@ async function commandAuth(args) {
         "",
         "To continue with CLI login:",
         `  code: ${started.code}`,
-        `  expires_in_seconds: ${started.expires_in_seconds}`,
-        `  url: ${started.approval_url}`,
-        "  enter this code in the dashboard before approving login",
-        "  Press Enter to open the browser login page, or Ctrl+C to cancel.",
+        `  expires at: ${formatExpiryClock(started.expires_in_seconds)}`,
+        "  press Enter to open the browser login page",
+        "  then enter this code in the dashboard and approve login",
         "",
       ].join("\n"));
 
       const opened = await waitForEnterToOpen(started.approval_url);
-      process.stdout.write([
-        process.env.CAPHUB_NO_OPEN === "1"
-          ? "browser_open: disabled by CAPHUB_NO_OPEN=1"
-          : `browser_open: ${opened ? "attempted" : "not attempted"}`,
-        opened ? "If the browser did not open, copy the URL above." : "Open the URL above in your browser.",
-        "Waiting for website approval...",
-        "",
-      ].join("\n"));
+      const followupLines = [];
+      if (process.env.CAPHUB_NO_OPEN === "1") {
+        followupLines.push("Browser open is disabled by CAPHUB_NO_OPEN=1.");
+        followupLines.push(`Open this URL manually: ${started.approval_url}`);
+      } else if (!opened) {
+        followupLines.push("Browser open did not start.");
+        followupLines.push(`Open this URL manually: ${started.approval_url}`);
+      }
+      followupLines.push("Waiting for website approval...");
+      followupLines.push("");
+      process.stdout.write(followupLines.join("\n"));
 
       const deadline = Date.now() + Number(started.expires_in_seconds || 600) * 1000;
       const intervalMs = Number(started.poll_interval_seconds || 2) * 1000;
@@ -2831,7 +3295,7 @@ async function commandAuth(args) {
             api_key: polled.api_key,
             api_url: apiUrl,
           });
-          process.stdout.write(`${JSON.stringify({ ok: true, config_path: CONFIG_PATH, api_url: apiUrl }, null, 2)}\n`);
+          writeAuthSuccess(apiUrl);
           return;
         }
 
@@ -2849,7 +3313,7 @@ async function commandAuth(args) {
       api_key: apiKey,
       api_url: apiUrl,
     });
-    process.stdout.write(`${JSON.stringify({ ok: true, config_path: CONFIG_PATH, api_url: apiUrl }, null, 2)}\n`);
+    writeAuthSuccess(apiUrl);
     return;
   }
 
@@ -2961,6 +3425,11 @@ async function main() {
 
   if (cmd === "finance") {
     await commandFinance(args.slice(1));
+    return;
+  }
+
+  if (cmd === "news") {
+    await commandNews(args.slice(1));
     return;
   }
 
