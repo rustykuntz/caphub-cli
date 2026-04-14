@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { lookup } from "node:dns/promises";
 import os from "node:os";
 import { isIP } from "node:net";
-import { dirname, resolve } from "node:path";
+import { dirname, extname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ const DEFAULT_QUEUE_MIN_POLL_MS = 1000;
 const DEFAULT_QUEUE_MAX_POLL_MS = 2500;
 const REDDIT_BASE_URL = "https://www.reddit.com";
 const YOUTUBE_BASE_URL = "https://www.youtube.com";
+const IMAGE_IDENTIFY_MAX_BYTES = 10 * 1024 * 1024;
 
 const LOCAL_FETCH_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -54,6 +55,8 @@ commands:
   reddit user <json>    fetch user posts or comments locally; free
   x user <json>         fetch compact X profile data server-side; costs credits
   x tweets <json>       fetch compact X tweets server-side; costs credits
+  image search <json>   search images server-side; costs credits
+  image identify <json> identify one image server-side; costs credits
   youtube search <json> search YouTube videos server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
   news world <json>     fetch recent world news for one country server-side; costs credits
@@ -72,7 +75,7 @@ recommended flow:
   1. caphub capabilities
   2. caphub help <capability>
   3. caphub auth login
-  4. caphub <capability> '<json>' or caphub reddit|x|jobs|youtube|finance|news|maps|cost|travel|weather <action> '<json>'
+  4. caphub <capability> '<json>' or caphub reddit|x|image|jobs|youtube|finance|news|maps|cost|travel|weather <action> '<json>'
 
 execution:
   server-side           runs on CapHub infrastructure and may consume credits
@@ -102,6 +105,9 @@ examples:
   caphub reddit feed '{"subreddit":"worldnews","sort":"new","limit":25}'
   caphub x user '{"username":"elonmusk"}'
   caphub x tweets '{"username":"MrBeast","count":10}'
+  caphub image search '{"queries":["ergonomic standing desk setup"],"country":"us","language":"en"}'
+  caphub image identify '{"url":"https://example.com/headphones.jpg"}'
+  caphub image identify '{"file":"./photo.jpg"}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub news world '{"country":"Hungary","language":"local"}'
@@ -175,6 +181,57 @@ examples:
   caphub search '{"queries":["best AI agent frameworks 2026"]}'
   caphub search '{"queries":["best AI agent frameworks 2026","autonomous coding agents"],"country":"us","language":"en"}'
   caphub search '{"queries":["EV discounts Thailand"],"country":"th","language":"en","from_time":"week"}'
+`;
+
+const IMAGE_HELP = `caphub image
+
+Server-side image capability.
+
+Use image search when you need image results for one or more text queries.
+Use image identify when you need to turn one public image URL or local image file into a compact searchable description.
+
+commands:
+  image search <json>    Search images server-side; requires auth; 1 credit per query, up to 5 queries in parallel
+  image identify <json>  Identify one image from a URL or local file server-side; requires auth; 4 credits per call
+
+routing:
+  find image content                          caphub image search
+  identify an image or turn image into query caphub image identify
+  chain into shopping after identify          agent decides; not automatic
+
+response fields:
+  search:
+    queries[].query
+    queries[].country
+    queries[].language
+    results[].query
+    results[].items[].title
+    results[].items[].image_url
+    results[].items[].thumbnail_url
+    results[].items[].width
+    results[].items[].height
+    results[].items[].source
+    results[].items[].source_domain
+    results[].items[].link
+    total_usage.total_credits_used
+    total_usage.credits_remaining
+    billing.credits_used
+    took_ms
+
+  identify:
+    url (when input was a public URL)
+    inferred_entity
+    specificity
+    category
+    total_usage.total_credits_used
+    total_usage.credits_remaining
+    billing.credits_used
+    took_ms
+
+examples:
+  caphub image search '{"queries":["ergonomic standing desk setup"],"country":"us","language":"en"}'
+  caphub image identify '{"url":"https://example.com/headphones.jpg"}'
+  caphub image identify '{"file":"./photo.jpg"}'
 `;
 
 const SCHOLAR_HELP = `caphub scholar
@@ -1164,6 +1221,22 @@ function readQueueSettings() {
   };
 }
 
+function resolveCliPath(rawPath) {
+  const value = String(rawPath || "").trim();
+  if (!value) return "";
+  if (value === "~") return os.homedir();
+  if (value.startsWith("~/")) return resolve(os.homedir(), value.slice(2));
+  return resolve(value);
+}
+
+function detectImageMimeFromPath(filePath) {
+  const ext = extname(String(filePath || "")).toLowerCase();
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".png") return "image/png";
+  if (ext === ".webp") return "image/webp";
+  return "";
+}
+
 function isHelpArg(value) {
   return value === "--help" || value === "-h" || value === "help";
 }
@@ -1517,6 +1590,41 @@ async function readOptionalJsonCommandInput(args, label) {
   } catch {
     fail(`Error: input must be valid JSON.\n\nnext:\n  - caphub ${label} --help\n  - pass exactly one JSON object`);
   }
+}
+
+function prepareImageIdentifyBody(body) {
+  const url = typeof body?.url === "string" ? body.url.trim() : "";
+  const file = typeof body?.file === "string" ? body.file.trim() : "";
+  if ((url && file) || (!url && !file)) {
+    fail("Error: provide exactly one of url or file.\n\nnext:\n  - caphub help image");
+  }
+  if (url) return body;
+
+  const filePath = resolveCliPath(file);
+  const mime = detectImageMimeFromPath(filePath);
+  if (!mime) {
+    fail("Error: local image file must be .jpg, .jpeg, .png, or .webp.\n\nnext:\n  - caphub help image");
+  }
+
+  let bytes;
+  try {
+    bytes = readFileSync(filePath);
+  } catch (error) {
+    fail(`Error: could not read image file: ${error.message}`);
+  }
+
+  if (!bytes?.length) {
+    fail("Error: local image file is empty.");
+  }
+  if (bytes.byteLength > IMAGE_IDENTIFY_MAX_BYTES) {
+    fail(`Error: local image file is too large. Max ${Math.floor(IMAGE_IDENTIFY_MAX_BYTES / (1024 * 1024))} MB.`);
+  }
+
+  const next = { ...body };
+  delete next.file;
+  next.image_b64 = bytes.toString("base64");
+  next.mime = mime;
+  return next;
 }
 
 function normalizeLimit(value, fallback, max) {
@@ -2714,6 +2822,22 @@ async function xServerAction(action, args, { requiresAuth = true } = {}) {
   process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
 }
 
+async function imageServerAction(action, args, { requiresAuth = true } = {}) {
+  let body = await readJsonCommandInput(args, `image ${action}`);
+  if (action === "identify") {
+    body = prepareImageIdentifyBody(body);
+  }
+  const apiKey = getApiKey();
+  const payload = await serverJsonAction(`${getApiUrl()}/v1/image/${action}`, {
+    apiKey,
+    body,
+    requiresAuth,
+    authLabel: `image ${action}`,
+    queueLabel: `image ${action}`,
+  });
+  process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
 async function jobsServerAction(action, args, { requiresAuth = true } = {}) {
   const body = await readJsonCommandInput(args, `jobs ${action}`);
   const apiKey = getApiKey();
@@ -3052,6 +3176,30 @@ async function commandX(args) {
   fail("Error: x actions are: user, tweets, media, followers, following, comments, search.");
 }
 
+async function commandImage(args) {
+  const sub = args[0];
+  if (!sub || isHelpArg(sub)) {
+    process.stdout.write(IMAGE_HELP);
+    return;
+  }
+  if (isHelpArg(args[1])) {
+    process.stdout.write(IMAGE_HELP);
+    return;
+  }
+
+  if (sub === "search") {
+    await imageServerAction("search", args.slice(1));
+    return;
+  }
+
+  if (sub === "identify") {
+    await imageServerAction("identify", args.slice(1));
+    return;
+  }
+
+  fail("Error: image actions are: search, identify.");
+}
+
 async function commandTravel(args) {
   const sub = args[0];
   if (!sub || isHelpArg(sub)) {
@@ -3148,6 +3296,10 @@ async function commandHelp(args) {
   }
   if (capability === "x") {
     process.stdout.write(X_HELP);
+    return;
+  }
+  if (capability === "image") {
+    process.stdout.write(IMAGE_HELP);
     return;
   }
   if (capability === "jobs") {
@@ -3405,6 +3557,11 @@ async function main() {
 
   if (cmd === "x") {
     await commandX(args.slice(1));
+    return;
+  }
+
+  if (cmd === "image") {
+    await commandImage(args.slice(1));
     return;
   }
 
