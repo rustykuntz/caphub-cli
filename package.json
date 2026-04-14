@@ -1,6 +1,6 @@
 {
   "name": "@caphub/cli",
-  "version": "0.1.53",
+  "version": "0.1.56",
   "description": "Root CLI for Caphub agent capabilities",
   "type": "module",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "files": [
     "bin",
+    "certs",
     "README.md"
   ],
   "keywords": [

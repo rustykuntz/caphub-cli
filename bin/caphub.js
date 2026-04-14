@@ -8,10 +8,12 @@ import { dirname, extname, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { createInterface } from "node:readline/promises";
+import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(resolve(__dirname, "..", "package.json"), "utf8"));
+const CA_BUNDLE_PATH = resolve(__dirname, "..", "certs", "cacert.pem");
 const DEFAULT_API_URL = "https://api.caphub.io";
 const CONFIG_DIR = resolve(os.homedir(), ".config", "caphub");
 const CONFIG_PATH = resolve(CONFIG_DIR, "config.json");
@@ -31,6 +33,29 @@ const LOCAL_FETCH_HEADERS = {
   "Cache-Control": "max-age=0",
   "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
 };
+
+function parsePemBundleCertificates(pemText) {
+  const matches = String(pemText || "").match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g);
+  return Array.isArray(matches) ? matches.map((entry) => entry.trim()) : [];
+}
+
+function configureDefaultCaBundle() {
+  if (process.env.NODE_EXTRA_CA_CERTS) return;
+  try {
+    const bundleText = readFileSync(CA_BUNDLE_PATH, "utf8");
+    const bundled = parsePemBundleCertificates(bundleText);
+    if (!bundled.length) return;
+    const existing = typeof getCACertificates === "function" ? getCACertificates() : [];
+    const merged = Array.from(new Set([...(existing || []), ...bundled]));
+    if (merged.length && typeof setDefaultCACertificates === "function") {
+      setDefaultCACertificates(merged);
+    }
+  } catch {
+    // Fall back to Node defaults when the vendored bundle is unavailable.
+  }
+}
+
+configureDefaultCaBundle();
 
 const ROOT_HELP = `caphub
 
@@ -60,6 +85,7 @@ commands:
   image search <json>   search images server-side; costs credits
   image identify <json> identify one image server-side; costs credits
   youtube search <json> search YouTube videos server-side; costs credits
+  youtube channel <json> fetch latest channel content server-side; costs credits
   youtube transcript <json> fetch YouTube transcript locally; free
   news world <json>     fetch recent world news for one country server-side; costs credits
   news finance <json>   fetch recent stock ticker news server-side; costs credits
@@ -112,6 +138,7 @@ examples:
   caphub image identify '{"url":"https://example.com/headphones.jpg"}'
   caphub image identify '{"file":"./photo.jpg"}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
+  caphub youtube channel '{"channel":"@DwarkeshPatel","content":"latest_videos"}'
   caphub youtube transcript '{"video_url":"GmE4JwmFuHk"}'
   caphub news world '{"country":"Hungary","language":"local"}'
   caphub news finance '{"queries":["NVDA","AAPL"]}'
@@ -624,26 +651,20 @@ const YOUTUBE_HELP = `caphub youtube
 
 Hybrid YouTube capability.
 
-Use YouTube when you need relevant videos, creator or playlist context, or a transcript from a known video. Local transcript reads are free when the machine can reach YouTube directly. Server-side search, channel, playlist, and transcript fallback actions are available when discovery or hosted access is needed.
+Use YouTube when you need relevant videos, the latest content from a known creator, playlist context, or a transcript from a known video. Local transcript reads are free when the machine can reach YouTube directly.
 
 commands:
   youtube transcript <json>         Fetch transcript locally; no auth; 0 credits
   youtube transcript-server <json>  Fetch transcript server-side; requires auth; 2 credits
   youtube search <json>             Search YouTube videos server-side; requires auth; 1 credit
-  youtube channel-resolve <json>    Resolve @handle/URL/UC... ID server-side; requires auth; 0 credits
-  youtube channel-search <json>     Search within a channel server-side; requires auth; 1 credit
-  youtube channel-videos <json>     List channel uploads page-by-page server-side; requires auth; 1 credit per page
-  youtube channel-latest <json>     Fetch latest 15 channel videos server-side; requires auth; 0 credits
+  youtube channel <json>            Fetch latest channel content by UC id, @handle, or channel URL; requires auth; 1 credit
   youtube playlist-videos <json>    List playlist videos page-by-page server-side; requires auth; 1 credit per page
 
 routing:
   known video id/url + local machine            caphub youtube transcript
   known video id/url + no local network path    caphub youtube transcript-server
   topic discovery across YouTube                caphub youtube search
-  convert @handle or channel URL to UC... ID    caphub youtube channel-resolve
-  search within one creator/channel             caphub youtube channel-search
-  enumerate uploads from a known channel        caphub youtube channel-videos
-  latest videos from a known channel            caphub youtube channel-latest
+  latest videos or live content from a channel  caphub youtube channel
   enumerate videos from a playlist              caphub youtube playlist-videos
 
 response fields:
@@ -674,30 +695,23 @@ response fields:
     billing.credits_used
     took_ms
 
-  channel-resolve:
-    input
+  channel:
+    channel.input
     channel.id
     channel.title
-    channel.handle
-    billing.credits_used
-    took_ms
-
-  channel-search:
-    results[]
-    result_count
-    billing.credits_used
-    took_ms
-
-  channel-videos:
-    results[]
-    continuation_token
-    has_more
-    billing.credits_used
-    took_ms
-
-  channel-latest:
-    results[]
-    result_count
+    channel.canonical_base_url
+    content
+    country
+    language
+    items[].title
+    items[].video_id
+    items[].url
+    items[].published_time
+    items[].duration_seconds
+    items[].views
+    items[].is_live_now
+    items[].thumbnail_url
+    item_count
     billing.credits_used
     took_ms
 
@@ -714,10 +728,8 @@ examples:
   caphub youtube transcript '{"video_url":"https://youtu.be/GmE4JwmFuHk","language":"en","send_metadata":true}'
   caphub youtube transcript-server '{"video_url":"GmE4JwmFuHk","send_metadata":true}'
   caphub youtube search '{"queries":["qwen3 8b review"],"limit":10}'
-  caphub youtube channel-resolve '{"input":"@TED"}'
-  caphub youtube channel-search '{"channel":"@TED","q":"ai","limit":10}'
-  caphub youtube channel-videos '{"channel":"@TED"}'
-  caphub youtube channel-latest '{"channel":"@TED"}'
+  caphub youtube channel '{"channel":"@TED","content":"latest_videos"}'
+  caphub youtube channel '{"channel":"https://www.youtube.com/@ChrisWillx","content":"latest_shorts"}'
   caphub youtube playlist-videos '{"playlist":"PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"}'
 `;
 
@@ -1576,6 +1588,85 @@ function fetchJsonViaCurl(url, { method, body, apiKey, originalError }) {
   });
 }
 
+function shouldFallbackLocalFetchToCurl(error) {
+  const code = String(error?.cause?.code || error?.code || "").toUpperCase();
+  return [
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+  ].includes(code);
+}
+
+function localFetchPageViaCurl(url, label, originalError) {
+  return new Promise((resolveFetch, rejectFetch) => {
+    const marker = "__CAPHUB_LOCAL_FETCH_META__";
+    const args = [
+      "-sS",
+      "-L",
+      "--max-time",
+      String(Math.ceil(LOCAL_FETCH_TIMEOUT_MS / 1000)),
+      "-H",
+      `Accept: ${LOCAL_FETCH_HEADERS.Accept}`,
+      "-H",
+      `Accept-Language: ${LOCAL_FETCH_HEADERS["Accept-Language"]}`,
+      "-H",
+      `Cache-Control: ${LOCAL_FETCH_HEADERS["Cache-Control"]}`,
+      "-H",
+      `User-Agent: ${LOCAL_FETCH_HEADERS["User-Agent"]}`,
+      "-w",
+      `\n${marker}%{url_effective}\n${marker}%{content_type}`,
+      url,
+    ];
+
+    const child = spawn("curl", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+
+    child.on("error", () => {
+      rejectFetch(new Error(`${label} failed: ${originalError?.message || "curl failed"}`));
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        rejectFetch(new Error(`${label} failed: ${stderr.trim() || originalError?.message || `curl exit ${code}`}`));
+        return;
+      }
+
+      const contentTypeIndex = stdout.lastIndexOf(`\n${marker}`);
+      if (contentTypeIndex === -1) {
+        rejectFetch(new Error(`${label} failed: invalid curl response`));
+        return;
+      }
+      const beforeContentType = stdout.slice(0, contentTypeIndex);
+      const finalUrlIndex = beforeContentType.lastIndexOf(`\n${marker}`);
+      if (finalUrlIndex === -1) {
+        rejectFetch(new Error(`${label} failed: invalid curl response`));
+        return;
+      }
+
+      const text = beforeContentType.slice(0, finalUrlIndex);
+      const finalUrl = beforeContentType.slice(finalUrlIndex + marker.length + 1).trim();
+      const contentType = stdout.slice(contentTypeIndex + marker.length + 1).trim();
+
+      if (!text) {
+        rejectFetch(new Error(`${label} returned an empty response`));
+        return;
+      }
+
+      resolveFetch({
+        url: finalUrl || url,
+        contentType,
+        text,
+      });
+    });
+  });
+}
+
 async function localFetchJson(url) {
   let resp;
   try {
@@ -1640,6 +1731,9 @@ async function localFetchPage(url, label) {
       signal: AbortSignal.timeout(LOCAL_FETCH_TIMEOUT_MS),
     });
   } catch (error) {
+    if (shouldFallbackLocalFetchToCurl(error)) {
+      return localFetchPageViaCurl(url, label, error);
+    }
     const reason = error.name === "TimeoutError"
       ? `timeout ${LOCAL_FETCH_TIMEOUT_MS / 1000}s`
       : (error.cause?.code || error.message);
@@ -3161,6 +3255,10 @@ async function commandYouTube(args) {
     await youtubeServerAction("search", args.slice(1));
     return;
   }
+  if (sub === "channel") {
+    await youtubeServerAction("channel", args.slice(1));
+    return;
+  }
   if (sub === "channel-resolve") {
     await youtubeServerAction("channel-resolve", args.slice(1));
     return;
@@ -3182,7 +3280,7 @@ async function commandYouTube(args) {
     return;
   }
 
-  fail("Error: youtube actions are: transcript, transcript-server, search, channel-resolve, channel-search, channel-videos, channel-latest, playlist-videos.");
+  fail("Error: youtube actions are: transcript, transcript-server, search, channel, channel-resolve, channel-search, channel-videos, channel-latest, playlist-videos.");
 }
 
 async function commandFinance(args) {
