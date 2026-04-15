@@ -3852,6 +3852,9 @@ async function commandAuth(args) {
         "  - caphub capabilities",
         "  - caphub help search",
         "",
+        "to log out:",
+        "  caphub auth logout",
+        "",
       ].join("\n"));
       return;
     } catch (error) {
@@ -3939,6 +3942,9 @@ async function commandAuth(args) {
           "  - caphub capabilities",
           "  - caphub help search",
           "",
+          "to log out:",
+          "  caphub auth logout",
+          "",
         ].join("\n"));
         return;
       } catch {
@@ -3967,7 +3973,6 @@ async function commandAuth(args) {
           "User login flow.",
           "Continue if you are a user that can approve the login in the browser, if you are an agent use caphub auth agent.",
           "",
-          "Press Enter to log in through caphub.io in your browser.",
           `  expires at: ${formatExpiryClock(started.expires_in_seconds)}`,
           `  url: ${started.approval_url}`,
           "",
