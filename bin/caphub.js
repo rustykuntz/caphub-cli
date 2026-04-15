@@ -2,12 +2,12 @@
 
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { lookup } from "node:dns/promises";
+import { createServer } from "node:http";
 import os from "node:os";
 import { isIP } from "node:net";
 import { dirname, extname, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { createInterface } from "node:readline/promises";
 import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { fileURLToPath } from "node:url";
 
@@ -26,6 +26,8 @@ const DEFAULT_QUEUE_MAX_POLL_MS = 2500;
 const REDDIT_BASE_URL = "https://www.reddit.com";
 const YOUTUBE_BASE_URL = "https://www.youtube.com";
 const IMAGE_IDENTIFY_MAX_BYTES = 10 * 1024 * 1024;
+const LOCALHOST_AUTH_CALLBACK_HOST = "127.0.0.1";
+const LOCALHOST_AUTH_CALLBACK_PATH = "/auth/callback";
 
 const LOCAL_FETCH_HEADERS = {
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -71,7 +73,7 @@ commands:
   capabilities          list live capabilities with short descriptions
   auth                  show current login state
   auth agent            create a machine-bound anonymous agent account and store the api key locally
-  auth login            human website login flow; requires browser approval; stores api key locally after approval
+  auth login            human website login flow; opens browser and returns through localhost callback
   auth whoami           verify the current api key against the API
   auth logout           remove stored api key from local config
   <capability> <json>   run a capability directly, e.g. search, scholar, patents, search-ideas, or shopping
@@ -1089,6 +1091,131 @@ function openUrl(url) {
     return true;
   } catch {
     return false;
+  }
+}
+
+function randomHex(bytes = 24) {
+  return randomBytes(bytes).toString("hex");
+}
+
+function renderLocalAuthCallbackPage(title, body) {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${title}</title>
+    <style>
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #fff7ed;
+        color: #111827;
+        font: 16px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        max-width: 520px;
+        margin: 24px;
+        padding: 28px 24px;
+        border: 1px solid #fdba74;
+        border-radius: 18px;
+        background: rgba(255,255,255,0.92);
+        box-shadow: 0 18px 60px -42px rgba(234, 88, 12, 0.45);
+      }
+      h1 { margin: 0 0 10px; font-size: 22px; line-height: 1.2; }
+      p { margin: 0; color: #374151; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>${title}</h1>
+      <p>${body}</p>
+    </main>
+  </body>
+</html>`;
+}
+
+async function startLocalAuthCallbackServer(expectedState) {
+  let settled = false;
+  let resolveCallback;
+  let rejectCallback;
+  const waitForCallback = new Promise((resolveWait, rejectWait) => {
+    resolveCallback = resolveWait;
+    rejectCallback = rejectWait;
+  });
+  const finish = (fn, value) => {
+    if (settled) return;
+    settled = true;
+    fn(value);
+  };
+
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || "/", `http://${req.headers.host || LOCALHOST_AUTH_CALLBACK_HOST}`);
+    if (req.method !== "GET" || url.pathname !== LOCALHOST_AUTH_CALLBACK_PATH) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" });
+      res.end("Not found");
+      return;
+    }
+
+    const state = (url.searchParams.get("state") || "").trim().toLowerCase();
+    const sessionId = (url.searchParams.get("session_id") || "").trim();
+    const callbackCode = (url.searchParams.get("callback_code") || "").trim();
+    if (!state || state !== expectedState || !sessionId || !callbackCode) {
+      res.writeHead(400, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(renderLocalAuthCallbackPage("CapHub login could not finish", "The browser callback did not match this terminal session. Return to the terminal and run caphub auth login again."));
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+    res.end(renderLocalAuthCallbackPage("CapHub login approved", "Return to your terminal. CapHub is finishing login on this machine."));
+    finish(resolveCallback, { sessionId, callbackCode });
+  });
+
+  server.on("error", (error) => finish(rejectCallback, error));
+
+  await new Promise((resolveListen, rejectListen) => {
+    const onError = (error) => {
+      server.off("listening", onListening);
+      rejectListen(error);
+    };
+    const onListening = () => {
+      server.off("error", onError);
+      resolveListen();
+    };
+    server.once("error", onError);
+    server.listen(0, LOCALHOST_AUTH_CALLBACK_HOST, onListening);
+  });
+
+  const address = server.address();
+  const port = typeof address === "object" && address ? Number(address.port || 0) : 0;
+  if (!port) {
+    server.close();
+    throw new Error("could not start localhost callback server");
+  }
+
+  return {
+    callbackUrl: `http://${LOCALHOST_AUTH_CALLBACK_HOST}:${port}${LOCALHOST_AUTH_CALLBACK_PATH}`,
+    waitForCallback,
+    close: async () => {
+      await new Promise((resolveClose) => server.close(() => resolveClose()));
+    },
+  };
+}
+
+async function waitForLocalAuthCallback(waitForCallback, timeoutMs) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      waitForCallback,
+      new Promise((_, rejectWait) => {
+        timer = setTimeout(() => rejectWait(new Error("login approval timed out")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -2223,22 +2350,6 @@ function parseRedditResultUrl(rawUrl) {
   } catch {
     return {};
   }
-}
-
-async function waitForEnterToOpen(url) {
-  if (process.env.CAPHUB_NO_OPEN === "1") return false;
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  try {
-    await rl.question("Press Enter to open the browser login page, then enter the code shown above. Ctrl+C to cancel.");
-  } finally {
-    rl.close();
-  }
-  return openUrl(url);
 }
 
 function parseFlag(args, name) {
@@ -3749,67 +3860,72 @@ async function commandAuth(args) {
     const explicitApiKey = parseFlag(args, "--api-key");
     if (!explicitApiKey && !args.includes("--api-key")) {
       const apiUrl = getApiUrl();
-      const started = await fetchJson(`${apiUrl}/v1/auth/cli/start`, { method: "POST", body: {} });
-      process.stdout.write([
-        "caphub auth login",
-        "-----------------",
-        "",
-        "Human approval flow.",
-        "Use this only when a human is present to open the browser, enter the code, and approve login.",
-        "",
-        "Caphub is the simplest way to give your AI agent access to the real world.",
-        "Instead of making the agent open pages, click through flows, and burn tokens on browser steps, Caphub returns clean JSON in one call with fresh data.",
-        "",
-        "If you have not created an account yet, visit caphub.io to register for free and get 500 credits per month.",
-        "",
-        "To continue with CLI login:",
-        `  code: ${started.code}`,
-        `  expires at: ${formatExpiryClock(started.expires_in_seconds)}`,
-        "  press Enter to open the browser login page",
-        "  then enter this code in the dashboard and approve login",
-        "",
-      ].join("\n"));
+      const callbackState = randomHex();
+      const callbackServer = await startLocalAuthCallbackServer(callbackState);
+      try {
+        const started = await fetchJson(`${apiUrl}/v1/auth/cli/start`, {
+          method: "POST",
+          body: {
+            callback_url: callbackServer.callbackUrl,
+            callback_state: callbackState,
+          },
+        });
 
-      const opened = await waitForEnterToOpen(started.approval_url);
-      const followupLines = [];
-      if (process.env.CAPHUB_NO_OPEN === "1") {
-        followupLines.push("Browser open is disabled by CAPHUB_NO_OPEN=1.");
-        followupLines.push(`Open this URL manually: ${started.approval_url}`);
-      } else if (!opened) {
-        followupLines.push("Browser open did not start.");
-        followupLines.push(`Open this URL manually: ${started.approval_url}`);
-      }
-      followupLines.push("Waiting for website approval...");
-      followupLines.push("");
-      process.stdout.write(followupLines.join("\n"));
+        const opened = openUrl(started.approval_url);
+        const lines = [
+          "caphub auth login",
+          "-----------------",
+          "",
+          "Human website login flow.",
+          "Use this only when a human is present to approve login in the browser.",
+          "",
+          "CapHub will send the approved login back to this machine automatically through a localhost callback.",
+          `  expires at: ${formatExpiryClock(started.expires_in_seconds)}`,
+        ];
+        if (process.env.CAPHUB_NO_OPEN === "1") {
+          lines.push("  browser open is disabled by CAPHUB_NO_OPEN=1");
+        } else if (opened) {
+          lines.push("  browser: opening approval page");
+        } else {
+          lines.push("  browser open did not start");
+        }
+        lines.push(`  url: ${started.approval_url}`, "", "Waiting for website approval...", "");
+        process.stdout.write(lines.join("\n"));
 
-      const deadline = Date.now() + Number(started.expires_in_seconds || 600) * 1000;
-      const intervalMs = Number(started.poll_interval_seconds || 2) * 1000;
-      while (Date.now() < deadline) {
-        const polled = await fetchJson(`${apiUrl}/v1/auth/cli/poll`, {
+        const callback = await waitForLocalAuthCallback(
+          callbackServer.waitForCallback,
+          Number(started.expires_in_seconds || 600) * 1000,
+        );
+        if (callback.sessionId !== started.session_id) {
+          fail("Error: login callback session did not match the terminal session.\n\nnext:\n  - rerun: caphub auth login");
+        }
+
+        const finalized = await fetchJson(`${apiUrl}/v1/auth/cli/finalize`, {
           method: "POST",
           body: {
             session_id: started.session_id,
             poll_token: started.poll_token,
+            callback_code: callback.callbackCode,
           },
         });
 
-        if (polled.status === "approved" && polled.api_key) {
-          await maybeAttachStoredAgentDevice(apiUrl, polled.api_key, config);
-          writeConfig({
-            ...config,
-            api_key: polled.api_key,
-            api_url: apiUrl,
-            auth_mode: "user",
-          });
-          writeAuthSuccess(apiUrl);
-          return;
+        await maybeAttachStoredAgentDevice(apiUrl, finalized.api_key, config);
+        writeConfig({
+          ...config,
+          api_key: finalized.api_key,
+          api_url: apiUrl,
+          auth_mode: "user",
+        });
+        writeAuthSuccess(apiUrl);
+        return;
+      } catch (error) {
+        if (error instanceof Error && error.message === "login approval timed out") {
+          fail("Error: login approval timed out.\n\nnext:\n  - rerun: caphub auth login\n  - or open https://caphub.io/dashboard/");
         }
-
-        await sleep(intervalMs);
+        throw error;
+      } finally {
+        await callbackServer.close();
       }
-
-      fail("Error: login approval timed out.\n\nnext:\n  - rerun: caphub auth login\n  - or open https://caphub.io/dashboard/");
     }
 
     const apiKey = explicitApiKey || getApiKey();
