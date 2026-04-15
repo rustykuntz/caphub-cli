@@ -8,6 +8,7 @@ import { isIP } from "node:net";
 import { dirname, extname, resolve } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { createInterface } from "node:readline/promises";
 import { getCACertificates, setDefaultCACertificates } from "node:tls";
 import { fileURLToPath } from "node:url";
 
@@ -160,6 +161,21 @@ examples:
   caphub weather forecast '{"location":"Koh Phangan","days":3}'
 `;
 
+function renderRootHelp({ isLoggedIn = false } = {}) {
+  if (isLoggedIn) return ROOT_HELP;
+  return [
+    "caphub",
+    "",
+    "Use CapHub to research products, compare offers, find the best places, learn a topic, get the latest news, and more without dragging full websites into context.",
+    "",
+    "You are not logged in:",
+    "Agent: run 'caphub auth agent'",
+    "User: run 'caphub auth login'",
+    "",
+    ROOT_HELP.split("\n").slice(3).join("\n"),
+  ].join("\n");
+}
+
 const FETCH_HELP = `caphub fetch
 
 Local page fetch capability.
@@ -177,6 +193,39 @@ routing:
 examples:
   caphub fetch page '{"url":"https://example.com"}'
   caphub fetch page '{"url":"https://example.com","include_html":true,"max_chars":8000}'
+`;
+
+const AUTH_HELP = `caphub auth
+
+CLI authentication and account state.
+
+Use auth to check login state, create a machine-bound agent account, attach or log in with a human user account, verify the current key, or log out from this machine.
+
+commands:
+  auth                  Show current login state
+  auth agent            Create or reuse a machine-bound anonymous agent account; stores API key locally
+  auth login            Human website login flow; opens browser and returns through localhost callback
+  auth whoami           Verify the current API key against the API
+  auth logout           Remove the stored API key from local config on this machine
+
+routing:
+  local agent-first setup                     caphub auth agent
+  human website login or account attach       caphub auth login
+  inspect current auth state                  caphub auth
+  verify the stored key                       caphub auth whoami
+  remove local login from this machine        caphub auth logout
+
+notes:
+  - auth logout removes the locally stored api key only
+  - auth logout does not delete the user account or machine account on the server
+  - after auth logout, run caphub auth agent or caphub auth login to use server capabilities again
+
+examples:
+  caphub auth
+  caphub auth agent
+  caphub auth login
+  caphub auth whoami
+  caphub auth logout
 `;
 
 const SEARCH_HELP = `caphub search
@@ -1142,6 +1191,7 @@ async function startLocalAuthCallbackServer(expectedState) {
   let settled = false;
   let resolveCallback;
   let rejectCallback;
+  const sockets = new Set();
   const waitForCallback = new Promise((resolveWait, rejectWait) => {
     resolveCallback = resolveWait;
     rejectCallback = rejectWait;
@@ -1170,11 +1220,18 @@ async function startLocalAuthCallbackServer(expectedState) {
     }
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-    res.end(renderLocalAuthCallbackPage("CapHub login approved", "Return to your terminal. CapHub is finishing login on this machine."));
+    res.end(renderLocalAuthCallbackPage("CapHub login approved", "You can close this window and return to your terminal."));
     finish(resolveCallback, { sessionId, callbackCode });
   });
 
   server.on("error", (error) => finish(rejectCallback, error));
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+  });
+  server.keepAliveTimeout = 0;
+  server.headersTimeout = 1000;
+  server.unref();
 
   await new Promise((resolveListen, rejectListen) => {
     const onError = (error) => {
@@ -1200,6 +1257,15 @@ async function startLocalAuthCallbackServer(expectedState) {
     callbackUrl: `http://${LOCALHOST_AUTH_CALLBACK_HOST}:${port}${LOCALHOST_AUTH_CALLBACK_PATH}`,
     waitForCallback,
     close: async () => {
+      server.closeIdleConnections?.();
+      server.closeAllConnections?.();
+      for (const socket of sockets) {
+        try {
+          socket.destroy();
+        } catch {
+          // Ignore socket close errors during shutdown.
+        }
+      }
       await new Promise((resolveClose) => server.close(() => resolveClose()));
     },
   };
@@ -1217,6 +1283,22 @@ async function waitForLocalAuthCallback(waitForCallback, timeoutMs) {
   } finally {
     if (timer) clearTimeout(timer);
   }
+}
+
+async function waitForEnterToOpen(url) {
+  if (process.env.CAPHUB_NO_OPEN === "1") return false;
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+  try {
+    await rl.question("Press Enter to open caphub.io in your browser. Ctrl+C to cancel.");
+  } finally {
+    rl.close();
+  }
+  return openUrl(url);
 }
 
 function readStdin() {
@@ -3640,7 +3722,7 @@ async function commandHelp(args) {
   const apiUrl = getApiUrl();
   const capability = args[0];
   if (!capability) {
-    process.stdout.write(ROOT_HELP);
+    process.stdout.write(renderRootHelp({ isLoggedIn: Boolean(getApiKey()) }));
     return;
   }
   if (capability === "reddit") {
@@ -3681,6 +3763,10 @@ async function commandHelp(args) {
   }
   if (capability === "fetch") {
     process.stdout.write(FETCH_HELP);
+    return;
+  }
+  if (capability === "auth") {
+    process.stdout.write(AUTH_HELP);
     return;
   }
   if (capability === "youtube") {
@@ -3730,6 +3816,11 @@ async function commandAuth(args) {
   const sub = args[0];
   const config = readConfig();
 
+  if (isHelpArg(sub)) {
+    process.stdout.write(AUTH_HELP);
+    return;
+  }
+
   if (!sub) {
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -3738,10 +3829,8 @@ async function commandAuth(args) {
         "",
         "status: not logged in",
         "",
-        "next:",
-        "  - caphub auth agent",
-        "  - or if a human is present to approve website login: caphub auth login",
-        "  - or for headless/cloud agents with an existing key: caphub auth login --api-key csk_live_...",
+        "Agent: run 'caphub auth agent'",
+        "User: run 'caphub auth login'",
         "",
       ].join("\n"));
       return;
@@ -3871,26 +3960,32 @@ async function commandAuth(args) {
           },
         });
 
-        const opened = openUrl(started.approval_url);
         const lines = [
           "caphub auth login",
           "-----------------",
           "",
-          "Human website login flow.",
-          "Use this only when a human is present to approve login in the browser.",
+          "User login flow.",
+          "Continue if you are a user that can approve the login in the browser, if you are an agent use caphub auth agent.",
           "",
-          "CapHub will send the approved login back to this machine automatically through a localhost callback.",
+          "Press Enter to log in through caphub.io in your browser.",
           `  expires at: ${formatExpiryClock(started.expires_in_seconds)}`,
+          `  url: ${started.approval_url}`,
+          "",
         ];
-        if (process.env.CAPHUB_NO_OPEN === "1") {
-          lines.push("  browser open is disabled by CAPHUB_NO_OPEN=1");
-        } else if (opened) {
-          lines.push("  browser: opening approval page");
-        } else {
-          lines.push("  browser open did not start");
-        }
-        lines.push(`  url: ${started.approval_url}`, "", "Waiting for website approval...", "");
         process.stdout.write(lines.join("\n"));
+
+        const opened = await waitForEnterToOpen(started.approval_url);
+        const followupLines = [];
+        if (process.env.CAPHUB_NO_OPEN === "1") {
+          followupLines.push("Browser open is disabled by CAPHUB_NO_OPEN=1.");
+          followupLines.push(`Open this URL manually: ${started.approval_url}`);
+        } else if (!opened) {
+          followupLines.push("Browser open did not start.");
+          followupLines.push(`Open this URL manually: ${started.approval_url}`);
+        }
+        followupLines.push("Waiting for website approval...");
+        followupLines.push("");
+        process.stdout.write(followupLines.join("\n"));
 
         const callback = await waitForLocalAuthCallback(
           callbackServer.waitForCallback,
@@ -3917,6 +4012,7 @@ async function commandAuth(args) {
           auth_mode: "user",
         });
         writeAuthSuccess(apiUrl);
+        process.exit(0);
         return;
       } catch (error) {
         if (error instanceof Error && error.message === "login approval timed out") {
